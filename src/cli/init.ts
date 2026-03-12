@@ -15,6 +15,10 @@ import { SOCKET_PATH } from '../daemon/socket.js';
 import { initializeSupabase, authenticateAnonymous, registerHost, generateHostFingerprint } from '../supabase/index.js';
 import { generatePairingToken, createPairingPayload, generatePairingQR, storePairingToken } from '../supabase/pairing.js';
 
+// Default remote server (YesPaPa management server, currently backed by Supabase)
+const DEFAULT_REMOTE_URL = 'https://izvdpjcqrrcxhokwycgu.supabase.co';
+const DEFAULT_REMOTE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml6dmRwamNxcnJjeGhva3d5Y2d1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMTI2OTgsImV4cCI6MjA4ODg4ODY5OH0.B-G2ZXIv5Tj8BXjgODN2V2mQdSXTpSQms-jxz62e00k';
+
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
 
@@ -155,10 +159,12 @@ export const initCommand = new Command('init')
       // Optional: Connect to remote management server (Supabase)
       const connectRemote = await prompt(rl, 'Connect to YesPaPa mobile app? (y/N): ');
       if (connectRemote.trim().toLowerCase() === 'y') {
-        const supabaseUrl = await prompt(rl, 'Remote server URL: ');
-        const supabaseKey = await prompt(rl, 'Remote server anon key: ');
+        const urlInput = await prompt(rl, `Remote server URL [${DEFAULT_REMOTE_URL}]: `);
+        const supabaseUrl = urlInput.trim() || DEFAULT_REMOTE_URL;
+        const keyInput = await prompt(rl, `Remote server key [default]: `);
+        const supabaseKey = keyInput.trim() || DEFAULT_REMOTE_KEY;
 
-        if (supabaseUrl.trim() && supabaseKey.trim()) {
+        if (supabaseUrl && supabaseKey) {
           try {
             console.log('\n  Connecting to remote server...');
             const supabase = initializeSupabase(supabaseUrl.trim(), supabaseKey.trim());
