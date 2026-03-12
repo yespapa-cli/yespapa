@@ -1,6 +1,12 @@
 import { authenticator } from 'otplib';
 
 // Configure per PRD: HMAC-SHA1, 6 digits, 30s period, ±1 skew
+//
+// IMPORTANT: Do NOT set `epoch` here. In otplib, `epoch` means "current time
+// in ms" (not the T0 reference). The default calls Date.now() on each
+// generate/check call, which correctly implements RFC 6238. Setting epoch: 0
+// would mean "current time is 0" (Unix epoch start) → counter always 0 →
+// codes incompatible with every authenticator app.
 authenticator.options = {
   digits: 6,
   step: 30,
