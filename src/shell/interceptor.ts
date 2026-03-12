@@ -238,8 +238,23 @@ export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
       content = readFileSync(profile, 'utf-8');
     }
 
-    if (content.includes(SOURCE_LINE)) {
-      // Already present, just update the script file
+    // Check if the line is present and active (not commented out)
+    const lines = content.split('\n');
+    const hasActiveLine = lines.some((line) => line.trim() === SOURCE_LINE);
+    if (hasActiveLine) {
+      // Already present and active, just update the script file
+      injected.push(profile);
+      continue;
+    }
+
+    // Uncomment if commented out (e.g., "# [ -f ~/.yespapa/...")
+    const commentedIndex = lines.findIndex(
+      (line) => line.trim() !== SOURCE_LINE && line.includes(SOURCE_LINE),
+    );
+    if (commentedIndex !== -1) {
+      lines[commentedIndex] = SOURCE_LINE;
+      content = lines.join('\n');
+      writeFileSync(profile, content);
       injected.push(profile);
       continue;
     }
@@ -302,18 +317,19 @@ export function removeInterceptor(): string[] {
 }
 
 /**
- * Check if the interceptor is installed in all shell profiles.
+ * Check if the interceptor is installed and active (not commented out) in all shell profiles.
  */
 export function isInterceptorInstalled(): boolean {
   // Check that the script file exists
   if (!existsSync(INTERCEPTOR_PATH)) return false;
 
-  // Check that source line is in all shell profiles
+  // Check that source line is present and uncommented in all shell profiles
   const profiles = getShellProfiles();
   for (const profile of profiles) {
     if (!existsSync(profile)) return false;
-    const content = readFileSync(profile, 'utf-8');
-    if (!content.includes(SOURCE_LINE)) return false;
+    const lines = readFileSync(profile, 'utf-8').split('\n');
+    const hasActiveLine = lines.some((line) => line.trim() === SOURCE_LINE);
+    if (!hasActiveLine) return false;
   }
   return true;
 }
