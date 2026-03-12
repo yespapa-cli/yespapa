@@ -10,7 +10,7 @@ import { authenticator } from 'otplib';
 authenticator.options = {
   digits: 6,
   step: 30,
-  window: 1, // ±1 period = 90s total window
+  window: 2, // ±2 periods = 150s total window (tolerates QR scan + typing delay)
 };
 
 /**
