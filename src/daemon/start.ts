@@ -8,9 +8,11 @@
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDatabase, setConfig, getConfig, getActiveGracePeriods } from '../db/index.js';
+import { openDatabase, setConfig, getConfig, getActiveGracePeriods, createGracePeriod, revokeGracePeriod } from '../db/index.js';
 import { decryptSeed } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
+import { validateGraceToken, getGraceRemaining, type GraceToken } from '../crypto/grace.js';
+import type { GraceMatch } from './socket.js';
 import { startDaemonServer, SOCKET_PATH } from './socket.js';
 import { startHeartbeat } from './heartbeat.js';
 import { appendFileSync } from 'node:fs';
@@ -54,10 +56,25 @@ async function main(): Promise<void> {
     // TOTP validator — closure over seed
     const totpValidator = (code: string): boolean => validateCode(seed, code);
 
-    // Grace period checker — closure over db
-    const graceChecker = (bundle?: string): boolean => {
+    // Grace period checker — closure over db + seed, validates HMAC
+    const graceChecker = (bundle?: string): GraceMatch | null => {
       const active = getActiveGracePeriods(db);
-      return active.some((gp) => gp.scope === 'all' || gp.scope === bundle);
+      for (const gp of active) {
+        if (gp.scope === 'all' || gp.scope === bundle) {
+          const token: GraceToken = {
+            id: gp.id,
+            scope: gp.scope,
+            expires_at: gp.expires_at,
+            hmac_signature: gp.hmac_signature,
+            created_at: gp.created_at,
+          };
+          if (validateGraceToken(seed, token)) {
+            return { scope: gp.scope, remaining: getGraceRemaining(token) };
+          }
+          log(`Grace period ${gp.id} failed HMAC validation — ignoring`);
+        }
+      }
+      return null;
     };
 
     // Connect to Supabase if configured
@@ -78,6 +95,29 @@ async function main(): Promise<void> {
           (state) => log(`Remote connection: ${state}`),
           (cmdId, status, message) => {
             log(`Remote resolution: ${cmdId} → ${status}${message ? ` (${message})` : ''}`);
+          },
+          (data) => {
+            // Sync remote grace periods into local DB
+            const id = data.id as string;
+            const scope = data.scope as string;
+            const expiresAt = data.expires_at as string;
+            const hmac = data.hmac_signature as string;
+            if (!id || !scope || !expiresAt || !hmac) return;
+
+            // Check if expired (revocation sets expires_at = now)
+            if (new Date(expiresAt) <= new Date()) {
+              revokeGracePeriod(db, id);
+              log(`Remote grace period revoked: ${id}`);
+              return;
+            }
+
+            try {
+              createGracePeriod(db, id, scope, expiresAt, hmac);
+              log(`Remote grace period synced: ${id} (${scope}, expires ${expiresAt})`);
+            } catch {
+              // Already exists — may be an update (revocation)
+              log(`Remote grace period update: ${id}`);
+            }
           },
         );
         reconnector.connect();

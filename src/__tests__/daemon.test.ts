@@ -46,7 +46,7 @@ describe('daemon socket server (two-phase protocol)', () => {
     server = await startDaemonServer(
       db,
       (code) => code === generateCode(testSeed) || code === '999999', // accept test code
-      () => false, // no grace periods
+      () => null, // no grace periods
       TEST_SOCKET,
     );
   });
@@ -120,12 +120,12 @@ describe('daemon socket server (two-phase protocol)', () => {
   });
 
   it('auto-approves when grace period is active', async () => {
-    // Restart with grace checker that returns true
+    // Restart with grace checker that returns a match
     await stopDaemonServer(server, TEST_SOCKET);
     server = await startDaemonServer(
       db,
       () => false,
-      () => true, // grace period active
+      () => ({ scope: 'all', remaining: '1h 0m' }), // grace period active
       TEST_SOCKET,
     );
 
@@ -135,5 +135,7 @@ describe('daemon socket server (two-phase protocol)', () => {
       fullCommand: 'rm -rf ./dist',
     });
     expect(response.status).toBe('approved');
+    expect(response.message).toContain('grace');
+    expect(response.message).toContain('1h 0m');
   });
 });

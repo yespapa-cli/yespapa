@@ -45,7 +45,11 @@ export interface RemoteResolution {
 }
 
 export type TotpValidator = (code: string) => boolean;
-export type GraceChecker = (bundle?: string) => boolean;
+export interface GraceMatch {
+  scope: string;
+  remaining: string;
+}
+export type GraceChecker = (bundle?: string) => GraceMatch | null;
 export type OnCommandPending = (commandId: string, command: string, justification?: string) => void;
 export type OnCommandResolved = (commandId: string, status: string, source?: string) => void;
 
@@ -186,12 +190,19 @@ function handleMessage(
     return;
   }
 
-  // Check grace periods
+  // Check grace periods (HMAC-validated, before TOTP prompt)
   const bundle = evalResult.rule?.bundle ?? undefined;
-  if (checkGrace(bundle)) {
+  const graceMatch = checkGrace(bundle);
+  if (graceMatch) {
     createCommand(db, commandId, cmdStr, justification);
     resolveCommand(db, commandId, 'grace', 'grace_token');
-    sendResponse(socket, { status: 'approved', id: commandId, command: cmdStr, message: 'Grace period active' });
+    onCommandResolved?.(commandId, 'grace', 'grace_token');
+    sendResponse(socket, {
+      status: 'approved',
+      id: commandId,
+      command: cmdStr,
+      message: `Auto-approved (grace: ${graceMatch.scope}, expires in ${graceMatch.remaining})`,
+    });
     return;
   }
 
