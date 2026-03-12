@@ -1,0 +1,60 @@
+import { describe, it, expect, vi } from 'vitest';
+import { createReconnectManager, type ConnectionState } from '../supabase/reconnect.js';
+
+// Mock the sync module
+vi.mock('../supabase/sync.js', () => ({
+  subscribeToApprovals: vi.fn().mockReturnValue({
+    on: vi.fn().mockReturnThis(),
+  }),
+  subscribeToGracePeriods: vi.fn().mockReturnValue({
+    on: vi.fn().mockReturnThis(),
+  }),
+}));
+
+function createMockSupabase() {
+  return {
+    channel: vi.fn().mockReturnValue({
+      on: vi.fn().mockReturnThis(),
+      subscribe: vi.fn().mockReturnThis(),
+    }),
+    removeChannel: vi.fn(),
+    removeAllChannels: vi.fn(),
+  } as unknown as import('@supabase/supabase-js').SupabaseClient;
+}
+
+describe('reconnect manager', () => {
+  it('starts in disconnected state', () => {
+    const mgr = createReconnectManager(createMockSupabase(), 'host-1', () => false);
+    expect(mgr.getState()).toBe('disconnected');
+  });
+
+  it('transitions to connected on connect', () => {
+    const states: ConnectionState[] = [];
+    const mgr = createReconnectManager(
+      createMockSupabase(),
+      'host-1',
+      () => false,
+      (s) => states.push(s),
+    );
+    mgr.connect();
+    expect(mgr.getState()).toBe('connected');
+  });
+
+  it('transitions to disconnected on disconnect', () => {
+    const supabase = createMockSupabase();
+    const mgr = createReconnectManager(supabase, 'host-1', () => false);
+    mgr.connect();
+    mgr.disconnect();
+    expect(mgr.getState()).toBe('disconnected');
+    expect(supabase.removeAllChannels).toHaveBeenCalled();
+  });
+
+  it('calls onStateChange callback', () => {
+    const callback = vi.fn();
+    const mgr = createReconnectManager(createMockSupabase(), 'host-1', () => false, callback);
+    mgr.connect();
+    expect(callback).toHaveBeenCalledWith('connected');
+    mgr.disconnect();
+    expect(callback).toHaveBeenCalledWith('disconnected');
+  });
+});
