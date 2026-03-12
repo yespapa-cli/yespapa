@@ -8,10 +8,10 @@
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDatabase, setConfig, getConfig } from '../db/index.js';
+import { openDatabase, setConfig, getConfig, getActiveGracePeriods } from '../db/index.js';
 import { decryptSeed } from '../crypto/index.js';
+import { validateCode } from '../totp/index.js';
 import { startDaemonServer, SOCKET_PATH } from './socket.js';
-import { createApprovalHandler } from './approval.js';
 import { startHeartbeat } from './heartbeat.js';
 import { appendFileSync } from 'node:fs';
 
@@ -48,9 +48,17 @@ async function main(): Promise<void> {
     // Update PID
     setConfig(db, 'daemon_pid', process.pid.toString());
 
+    // TOTP validator — closure over seed
+    const totpValidator = (code: string): boolean => validateCode(seed, code);
+
+    // Grace period checker — closure over db
+    const graceChecker = (bundle?: string): boolean => {
+      const active = getActiveGracePeriods(db);
+      return active.some((gp) => gp.scope === 'all' || gp.scope === bundle);
+    };
+
     // Start socket server
-    const handler = createApprovalHandler(db, seed);
-    await startDaemonServer(db, handler);
+    await startDaemonServer(db, totpValidator, graceChecker);
     log(`Daemon started (PID: ${process.pid}, socket: ${SOCKET_PATH})`);
 
     // Start heartbeat

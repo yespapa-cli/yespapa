@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
-import { fork } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { generateSeed, validateCode } from '../totp/index.js';
 import { displayTotpQR } from '../totp/qr.js';
@@ -143,7 +143,7 @@ export const initCommand = new Command('init')
       // Start daemon as detached background process
       db.close();
       const daemonScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'daemon', 'start.js');
-      const child = fork(daemonScript, [password], {
+      const child = spawn(process.execPath, [daemonScript, password], {
         detached: true,
         stdio: 'ignore',
       });
@@ -162,6 +162,7 @@ export const initCommand = new Command('init')
       console.log(`   source ${rcFile}\n`);
       console.log(`   Or open a new terminal window.\n`);
       console.log(`   Run "yespapa status" to check the current state.\n`);
+      process.exit(0);
     } catch (error) {
       console.error('Initialization failed:', error);
       rl.close();

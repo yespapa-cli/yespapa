@@ -15,108 +15,132 @@ export interface CommandRequest {
 }
 
 export interface CommandResponse {
-  status: 'approved' | 'denied' | 'timeout' | 'error';
+  status: 'approved' | 'denied' | 'timeout' | 'error' | 'needs_totp';
   message?: string;
   id: string;
   command: string;
+  rule?: string;
 }
 
-type ApprovalHandler = (
-  commandId: string,
-  command: string,
-  args: string[],
-  justification?: string,
-) => Promise<{ status: CommandStatus; source?: ApprovalSource; message?: string }>;
+/**
+ * A TOTP submission from the interceptor: { totp: "123456", id: "cmd_xxx" }
+ */
+export interface TotpSubmission {
+  totp: string;
+  id: string;
+}
+
+type TotpValidator = (code: string) => boolean;
+type GraceChecker = (bundle?: string) => boolean;
 
 function generateCommandId(): string {
   return `cmd_${randomBytes(4).toString('hex')}`;
 }
 
+/**
+ * Create the daemon socket server.
+ *
+ * Protocol (two-phase for denied commands):
+ * 1. Interceptor sends CommandRequest → daemon replies with 'approved', 'error', or 'needs_totp'
+ * 2. If 'needs_totp': interceptor prompts user, sends TotpSubmission → daemon replies 'approved' or 'denied'
+ */
 export function createDaemonServer(
   db: Database.Database,
-  onApprovalNeeded: ApprovalHandler,
+  validateTotp: TotpValidator,
+  checkGrace: GraceChecker,
 ): Server {
+  // Track pending commands waiting for TOTP
+  const pendingCommands = new Map<string, { command: string; bundle?: string }>();
+
   const server = createServer((socket: Socket) => {
     let buffer = '';
 
     socket.on('data', (data) => {
       buffer += data.toString();
 
-      // Process complete JSON messages (newline-delimited)
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
 
       for (const line of lines) {
         if (line.trim()) {
-          handleRequest(db, socket, line.trim(), onApprovalNeeded);
+          handleMessage(db, socket, line.trim(), validateTotp, checkGrace, pendingCommands);
         }
       }
     });
 
-    socket.on('error', () => {
-      // Client disconnected, ignore
-    });
+    socket.on('error', () => {});
   });
 
   return server;
 }
 
-async function handleRequest(
+function handleMessage(
   db: Database.Database,
   socket: Socket,
   data: string,
-  onApprovalNeeded: ApprovalHandler,
-): Promise<void> {
-  let request: CommandRequest;
+  validateTotp: TotpValidator,
+  checkGrace: GraceChecker,
+  pendingCommands: Map<string, { command: string; bundle?: string }>,
+): void {
+  let msg: Record<string, unknown>;
   try {
-    request = JSON.parse(data);
+    msg = JSON.parse(data);
   } catch {
     sendResponse(socket, { status: 'error', message: 'Invalid JSON', id: '', command: '' });
     return;
   }
 
+  // Phase 2: TOTP submission for a pending command
+  if ('totp' in msg && 'id' in msg) {
+    const submission = msg as unknown as TotpSubmission;
+    const pending = pendingCommands.get(submission.id);
+    if (!pending) {
+      sendResponse(socket, { status: 'error', message: 'Unknown command ID', id: submission.id, command: '' });
+      return;
+    }
+
+    if (validateTotp(submission.totp)) {
+      pendingCommands.delete(submission.id);
+      resolveCommand(db, submission.id, 'approved', 'totp_stdin');
+      sendResponse(socket, { status: 'approved', id: submission.id, command: pending.command });
+    } else {
+      sendResponse(socket, { status: 'denied', message: 'Invalid TOTP code', id: submission.id, command: pending.command });
+    }
+    return;
+  }
+
+  // Phase 1: Command request
+  const request = msg as unknown as CommandRequest;
   const { command, args, fullCommand, justification } = request;
   const commandId = generateCommandId();
+  const cmdStr = fullCommand ?? [command, ...args].join(' ');
 
   // Evaluate against rules
   const evalResult = evaluateCommand(command, args, fullCommand, db);
 
-  if (evalResult.action === 'allow') {
-    sendResponse(socket, { status: 'approved', id: commandId, command: fullCommand ?? [command, ...args].join(' ') });
+  if (evalResult.action === 'allow' || evalResult.action === 'pass') {
+    sendResponse(socket, { status: 'approved', id: commandId, command: cmdStr });
     return;
   }
 
-  if (evalResult.action === 'pass') {
-    // Not on any rule list — pass through
-    sendResponse(socket, { status: 'approved', id: commandId, command: fullCommand ?? [command, ...args].join(' ') });
+  // Check grace periods
+  const bundle = evalResult.rule?.bundle ?? undefined;
+  if (checkGrace(bundle)) {
+    createCommand(db, commandId, cmdStr, justification);
+    resolveCommand(db, commandId, 'grace', 'grace_token');
+    sendResponse(socket, { status: 'approved', id: commandId, command: cmdStr, message: 'Grace period active' });
     return;
   }
 
-  // Command is denied by rules — needs approval
-  const cmdStr = fullCommand ?? [command, ...args].join(' ');
+  // Needs TOTP — log command and ask interceptor to prompt user
   createCommand(db, commandId, cmdStr, justification);
-
-  try {
-    const result = await onApprovalNeeded(commandId, command, args, justification);
-
-    resolveCommand(db, commandId, result.status, result.source, result.message);
-
-    const response: CommandResponse = {
-      status: result.status === 'approved' || result.status === 'grace' ? 'approved' : 'denied',
-      message: result.message,
-      id: commandId,
-      command: cmdStr,
-    };
-    sendResponse(socket, response);
-  } catch (err) {
-    resolveCommand(db, commandId, 'timeout');
-    sendResponse(socket, {
-      status: 'timeout',
-      message: 'Approval timed out',
-      id: commandId,
-      command: cmdStr,
-    });
-  }
+  pendingCommands.set(commandId, { command: cmdStr, bundle });
+  sendResponse(socket, {
+    status: 'needs_totp',
+    id: commandId,
+    command: cmdStr,
+    rule: evalResult.rule?.reason ?? undefined,
+  });
 }
 
 function sendResponse(socket: Socket, response: CommandResponse): void {
@@ -129,7 +153,8 @@ function sendResponse(socket: Socket, response: CommandResponse): void {
 
 export function startDaemonServer(
   db: Database.Database,
-  onApprovalNeeded: ApprovalHandler,
+  validateTotp: TotpValidator,
+  checkGrace: GraceChecker,
   socketPath: string = SOCKET_PATH,
 ): Promise<Server> {
   // Clean up stale socket
@@ -137,7 +162,7 @@ export function startDaemonServer(
     unlinkSync(socketPath);
   }
 
-  const server = createDaemonServer(db, onApprovalNeeded);
+  const server = createDaemonServer(db, validateTotp, checkGrace);
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);
