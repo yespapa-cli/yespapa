@@ -26,7 +26,7 @@ export interface CommandLogRow {
   justification: string | null;
   status: CommandStatus;
   approval_source: ApprovalSource | null;
-  denial_message: string | null;
+  message: string | null;
   created_at: string;
   resolved_at: string | null;
 }
@@ -60,7 +60,7 @@ const SCHEMA = `
     justification TEXT,
     status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'denied', 'timeout', 'grace')),
     approval_source TEXT CHECK(approval_source IN ('totp_stdin', 'app_approve', 'grace_token')),
-    denial_message TEXT,
+    message TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     resolved_at TEXT
   );
@@ -157,13 +157,13 @@ export function resolveCommand(
   id: string,
   status: CommandStatus,
   approvalSource?: ApprovalSource,
-  denialMessage?: string,
+  message?: string,
 ): void {
   db.prepare(
     `UPDATE command_log
-     SET status = ?, approval_source = ?, denial_message = ?, resolved_at = datetime('now')
+     SET status = ?, approval_source = ?, message = ?, resolved_at = datetime('now')
      WHERE id = ?`,
-  ).run(status, approvalSource ?? null, denialMessage ?? null, id);
+  ).run(status, approvalSource ?? null, message ?? null, id);
 }
 
 export function getCommand(db: Database.Database, id: string): CommandLogRow | undefined {

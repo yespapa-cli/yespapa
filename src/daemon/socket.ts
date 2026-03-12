@@ -15,7 +15,7 @@ export interface CommandRequest {
 }
 
 export interface CommandResponse {
-  status: 'approved' | 'denied' | 'timeout' | 'error' | 'needs_totp';
+  status: 'approved' | 'denied' | 'timeout' | 'error' | 'needs_totp' | 'pending';
   message?: string;
   id: string;
   command: string;
@@ -30,8 +30,42 @@ export interface TotpSubmission {
   id: string;
 }
 
-type TotpValidator = (code: string) => boolean;
-type GraceChecker = (bundle?: string) => boolean;
+/**
+ * A poll-check from the interceptor: { check: "cmd_xxx" }
+ * Used to poll for remote resolution (Supabase approval/denial).
+ */
+export interface PollCheck {
+  check: string;
+}
+
+export interface RemoteResolution {
+  status: 'approved' | 'denied';
+  message?: string;
+  source: 'app_approve';
+}
+
+export type TotpValidator = (code: string) => boolean;
+export type GraceChecker = (bundle?: string) => boolean;
+
+// Track remotely resolved commands (set by sync module when Supabase approval arrives)
+const remoteResolutions = new Map<string, RemoteResolution>();
+
+/**
+ * Record a remote resolution (called by sync module when Supabase approval/denial arrives).
+ */
+export function setRemoteResolution(commandId: string, resolution: RemoteResolution): void {
+  remoteResolutions.set(commandId, resolution);
+}
+
+/**
+ * Get pending commands map (for sync module to know what's pending).
+ */
+export function getPendingCommandIds(): string[] {
+  return [...pendingCommandsRef.keys()];
+}
+
+// Module-level reference to pending commands map (set in createDaemonServer)
+let pendingCommandsRef = new Map<string, { command: string; bundle?: string }>();
 
 function generateCommandId(): string {
   return `cmd_${randomBytes(4).toString('hex')}`;
@@ -51,6 +85,7 @@ export function createDaemonServer(
 ): Server {
   // Track pending commands waiting for TOTP
   const pendingCommands = new Map<string, { command: string; bundle?: string }>();
+  pendingCommandsRef = pendingCommands;
 
   const server = createServer((socket: Socket) => {
     let buffer = '';
@@ -87,6 +122,27 @@ function handleMessage(
     msg = JSON.parse(data);
   } catch {
     sendResponse(socket, { status: 'error', message: 'Invalid JSON', id: '', command: '' });
+    return;
+  }
+
+  // Poll-check: interceptor asking if a command was resolved remotely
+  if ('check' in msg) {
+    const checkId = msg.check as string;
+    const resolution = remoteResolutions.get(checkId);
+    if (resolution) {
+      const pending = pendingCommands.get(checkId);
+      remoteResolutions.delete(checkId);
+      pendingCommands.delete(checkId);
+      resolveCommand(db, checkId, resolution.status as CommandStatus, resolution.source as ApprovalSource, resolution.message);
+      sendResponse(socket, {
+        status: resolution.status,
+        id: checkId,
+        command: pending?.command ?? '',
+        message: resolution.message,
+      });
+    } else {
+      sendResponse(socket, { status: 'pending', id: checkId, command: '' });
+    }
     return;
   }
 

@@ -1,0 +1,149 @@
+import type { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
+import { setRemoteResolution, type TotpValidator } from '../daemon/socket.js';
+
+export interface SyncConfig {
+  supabase: SupabaseClient;
+  hostId: string;
+  validateTotp: TotpValidator;
+  onCommandResolved?: (commandId: string, status: string, message?: string) => void;
+}
+
+let channel: RealtimeChannel | null = null;
+
+/**
+ * Push a pending command to the Supabase `commands` table.
+ */
+export async function pushCommand(
+  supabase: SupabaseClient,
+  hostId: string,
+  commandId: string,
+  commandDisplay: string,
+  justification?: string,
+  timeoutSeconds?: number,
+): Promise<void> {
+  const { error } = await supabase.from('commands').insert({
+    id: commandId,
+    host_id: hostId,
+    command_display: commandDisplay,
+    justification: justification ?? null,
+    status: 'pending',
+    timeout_seconds: timeoutSeconds ?? 0,
+  });
+
+  if (error) {
+    console.error(`[YesPaPa] Failed to push command to Supabase: ${error.message}`);
+  }
+}
+
+/**
+ * Subscribe to Realtime updates on the `commands` table for this host.
+ * When an approval/denial arrives from the mobile app, validate TOTP (for approvals)
+ * and set the remote resolution so the poll-check handler can pick it up.
+ */
+export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
+  const { supabase, hostId, validateTotp, onCommandResolved } = config;
+
+  // Unsubscribe from previous channel if any
+  if (channel) {
+    supabase.removeChannel(channel);
+    channel = null;
+  }
+
+  channel = supabase
+    .channel(`commands:host_id=eq.${hostId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'commands',
+        filter: `host_id=eq.${hostId}`,
+      },
+      (payload) => {
+        const row = payload.new as Record<string, unknown>;
+        const commandId = row.id as string;
+        const status = row.status as string;
+        const totpCode = row.totp_code as string | undefined;
+        const message = row.message as string | undefined;
+
+        if (status === 'approved') {
+          // Validate TOTP — the app must have sent a valid code
+          if (!totpCode || !validateTotp(totpCode)) {
+            console.log(`[YesPaPa] Ignoring invalid remote approval for ${commandId} (bad TOTP)`);
+            return;
+          }
+          setRemoteResolution(commandId, {
+            status: 'approved',
+            message,
+            source: 'app_approve',
+          });
+          onCommandResolved?.(commandId, 'approved', message);
+        } else if (status === 'denied') {
+          setRemoteResolution(commandId, {
+            status: 'denied',
+            message,
+            source: 'app_approve',
+          });
+          onCommandResolved?.(commandId, 'denied', message);
+        }
+      },
+    )
+    .subscribe();
+
+  return channel;
+}
+
+/**
+ * Subscribe to Realtime updates on the `grace_periods` table for this host.
+ */
+export function subscribeToGracePeriods(
+  supabase: SupabaseClient,
+  hostId: string,
+  onGracePeriod?: (data: Record<string, unknown>) => void,
+): RealtimeChannel {
+  return supabase
+    .channel(`grace_periods:host_id=eq.${hostId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'grace_periods',
+        filter: `host_id=eq.${hostId}`,
+      },
+      (payload) => {
+        onGracePeriod?.(payload.new as Record<string, unknown>);
+      },
+    )
+    .subscribe();
+}
+
+/**
+ * Update a command's status in Supabase (for syncing locally-resolved commands).
+ */
+export async function syncCommandResolution(
+  supabase: SupabaseClient,
+  commandId: string,
+  status: string,
+  approvalSource?: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('commands')
+    .update({
+      status,
+      resolved_at: new Date().toISOString(),
+    })
+    .eq('id', commandId);
+
+  if (error) {
+    console.error(`[YesPaPa] Failed to sync command resolution to Supabase: ${error.message}`);
+  }
+}
+
+/**
+ * Unsubscribe from all channels.
+ */
+export function unsubscribeAll(supabase: SupabaseClient): void {
+  supabase.removeAllChannels();
+  channel = null;
+}

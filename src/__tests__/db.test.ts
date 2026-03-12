@@ -99,7 +99,7 @@ describe('command_log table', () => {
     resolveCommand(db, 'cmd_003', 'denied', undefined, 'Too dangerous');
     const cmd = getCommand(db, 'cmd_003');
     expect(cmd?.status).toBe('denied');
-    expect(cmd?.denial_message).toBe('Too dangerous');
+    expect(cmd?.message).toBe('Too dangerous');
   });
 
   it('lists pending commands', () => {
