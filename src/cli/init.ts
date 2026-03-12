@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { existsSync, mkdirSync } from 'node:fs';
 import { generateSeed, validateCode } from '../totp/index.js';
 import { displayTotpQR } from '../totp/qr.js';
@@ -146,6 +146,5 @@ export const initCommand = new Command('init')
   });
 
 function getDefaultHostName(): string {
-  const { hostname } = require('node:os');
   return hostname().toLowerCase().replace(/\.local$/, '');
 }
