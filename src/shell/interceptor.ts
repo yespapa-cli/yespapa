@@ -54,16 +54,16 @@ yespapa_intercept() {
     return 1
   fi
 
-  local status
-  status=$(yespapa_json_field "$response" "status")
-  if [ "$status" = "approved" ]; then
+  local yp_status
+  yp_status=$(yespapa_json_field "$response" "status")
+  if [ "$yp_status" = "approved" ]; then
     return 0
   fi
 
-  if [ "$status" != "needs_totp" ]; then
-    local message
-    message=$(yespapa_json_field "$response" "message")
-    echo "[YesPaPa] Command denied: $message" >&2
+  if [ "$yp_status" != "needs_totp" ]; then
+    local yp_message
+    yp_message=$(yespapa_json_field "$response" "message")
+    echo "[YesPaPa] Command denied: $yp_message" >&2
     return 1
   fi
 
@@ -89,9 +89,9 @@ yespapa_intercept() {
     fi
     local totp_response
     totp_response=$(yespapa_send "{\\"totp\\":\\"$totp_code\\",\\"id\\":\\"$cmd_id\\"}")
-    local totp_status
-    totp_status=$(yespapa_json_field "$totp_response" "status")
-    if [ "$totp_status" = "approved" ]; then
+    local yp_totp_status
+    yp_totp_status=$(yespapa_json_field "$totp_response" "status")
+    if [ "$yp_totp_status" = "approved" ]; then
       echo "  [YesPaPa] Approved" >&2
       return 0
     fi
