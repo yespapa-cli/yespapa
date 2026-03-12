@@ -90,38 +90,42 @@ export async function registerHost(
   const supabase = getSupabaseClient();
   const fp = fingerprint ?? generateHostFingerprint();
 
-  // Check for existing host with same fingerprint
-  const { data: existing, error: fetchError } = await supabase
+  // Try to find an existing host owned by the current user
+  const { data: ownedHosts } = await supabase
     .from('hosts')
     .select('*')
-    .eq('host_fingerprint', fp)
-    .maybeSingle();
+    .eq('host_fingerprint', fp);
 
-  if (fetchError) {
-    throw new Error(`Failed to check existing host: ${fetchError.message}`);
-  }
-
-  if (existing) {
-    // Update host name and last_seen_at
+  // Check if any of the returned hosts are owned by us (we can update them)
+  if (ownedHosts && ownedHosts.length > 0) {
+    // Try updating the first one — will succeed only if we own it (RLS)
+    const candidate = ownedHosts[0];
     const { data: updated, error: updateError } = await supabase
       .from('hosts')
       .update({ host_name: hostName, last_seen_at: new Date().toISOString() })
-      .eq('id', existing.id)
+      .eq('id', candidate.id)
       .select()
-      .single();
+      .maybeSingle();
 
-    if (updateError) {
-      throw new Error(`Failed to update host: ${updateError.message}`);
+    if (!updateError && updated) {
+      return updated as HostRecord;
     }
-    return updated as HostRecord;
+    // If update failed (different owner), fall through to insert
   }
 
-  // Insert new host
+  // Insert new host for the current user (new fingerprint or different owner)
+  // Use a unique fingerprint suffix if the base fingerprint is taken by another user
+  let insertFp = fp;
+  if (ownedHosts && ownedHosts.length > 0) {
+    // Fingerprint exists but owned by another user — append timestamp to make unique
+    insertFp = `${fp}:${Date.now()}`;
+  }
+
   const { data: inserted, error: insertError } = await supabase
     .from('hosts')
     .insert({
       host_name: hostName,
-      host_fingerprint: fp,
+      host_fingerprint: insertFp,
       last_seen_at: new Date().toISOString(),
     })
     .select()

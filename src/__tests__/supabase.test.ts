@@ -109,19 +109,15 @@ describe('supabase client module', () => {
         created_at: '2026-03-12T00:00:00Z',
       };
 
-      const selectChain = { eq: vi.fn().mockReturnValue({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) }) };
-      const insertChain = {
-        select: vi.fn().mockReturnValue({ single: vi.fn().mockResolvedValue({ data: mockHost, error: null }) }),
-      };
-
-      (client.from as ReturnType<typeof vi.fn>).mockImplementation((table: string) => {
-        if (table === 'hosts') {
-          return {
-            select: vi.fn().mockReturnValue(selectChain),
-            insert: vi.fn().mockReturnValue(insertChain),
-          };
-        }
-        return {};
+      (client.from as ReturnType<typeof vi.fn>).mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockResolvedValue({ data: [], error: null }),
+        }),
+        insert: vi.fn().mockReturnValue({
+          select: vi.fn().mockReturnValue({
+            single: vi.fn().mockResolvedValue({ data: mockHost, error: null }),
+          }),
+        }),
       });
 
       const result = await registerHost('my-macbook', 'fp-abc');
@@ -129,7 +125,7 @@ describe('supabase client module', () => {
       expect(result.host_name).toBe('my-macbook');
     });
 
-    it('updates existing host if fingerprint found', async () => {
+    it('updates existing host if owned by current user', async () => {
       const client = initializeSupabase('https://test.supabase.co', 'key');
       const existingHost = {
         id: 'host-uuid',
@@ -142,23 +138,18 @@ describe('supabase client module', () => {
       };
       const updatedHost = { ...existingHost, host_name: 'new-name', last_seen_at: '2026-03-12T00:00:00Z' };
 
-      const selectChain = {
-        eq: vi.fn().mockReturnValue({
-          maybeSingle: vi.fn().mockResolvedValue({ data: existingHost, error: null }),
+      (client.from as ReturnType<typeof vi.fn>).mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockResolvedValue({ data: [existingHost], error: null }),
         }),
-      };
-      const updateChain = {
-        eq: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue({ data: updatedHost, error: null }),
+        update: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            select: vi.fn().mockReturnValue({
+              maybeSingle: vi.fn().mockResolvedValue({ data: updatedHost, error: null }),
+            }),
           }),
         }),
-      };
-
-      (client.from as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-        select: vi.fn().mockReturnValue(selectChain),
-        update: vi.fn().mockReturnValue(updateChain),
-      }));
+      });
 
       const result = await registerHost('new-name', 'fp-abc');
       expect(result.host_name).toBe('new-name');
