@@ -12,6 +12,8 @@ import { hashPassword, encryptSeed } from '../crypto/index.js';
 import { seedDefaultRules } from '../rules/index.js';
 import { injectInterceptor } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
+import { initializeSupabase, authenticateAnonymous, registerHost, generateHostFingerprint } from '../supabase/index.js';
+import { generatePairingToken, createPairingPayload, generatePairingQR, storePairingToken } from '../supabase/pairing.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -150,11 +152,53 @@ export const initCommand = new Command('init')
       child.unref();
       console.log(`  ✓ Daemon started in background (PID: ${child.pid}, socket: ${SOCKET_PATH})`);
 
+      // Optional: Connect to remote management server (Supabase)
+      const connectRemote = await prompt(rl, 'Connect to YesPaPa mobile app? (y/N): ');
+      if (connectRemote.trim().toLowerCase() === 'y') {
+        const supabaseUrl = await prompt(rl, 'Remote server URL: ');
+        const supabaseKey = await prompt(rl, 'Remote server anon key: ');
+
+        if (supabaseUrl.trim() && supabaseKey.trim()) {
+          try {
+            console.log('\n  Connecting to remote server...');
+            const supabase = initializeSupabase(supabaseUrl.trim(), supabaseKey.trim());
+
+            // Authenticate anonymously
+            const { userId } = await authenticateAnonymous();
+            console.log('  ✓ Authenticated with remote server');
+
+            // Register host
+            const hostRecord = await registerHost(hostName, generateHostFingerprint());
+            console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
+
+            // Generate pairing token and QR
+            const pairingToken = generatePairingToken();
+            await storePairingToken(supabase, hostRecord.id, pairingToken);
+            const payload = createPairingPayload(supabaseUrl.trim(), supabaseKey.trim(), hostRecord.id, pairingToken);
+            const qrStr = await generatePairingQR(payload);
+            console.log('\n  Scan this QR code with the YesPaPa mobile app to pair:\n');
+            console.log(qrStr);
+
+            // Reopen DB to store config (was closed for daemon)
+            const db2 = openDatabase(DB_PATH);
+            setConfig(db2, 'supabase_url', supabaseUrl.trim());
+            setConfig(db2, 'supabase_anon_key', supabaseKey.trim());
+            setConfig(db2, 'supabase_host_id', hostRecord.id);
+            setConfig(db2, 'supabase_user_id', userId);
+            db2.close();
+
+            console.log('  ✓ Remote server configured. Mobile app can now approve commands.');
+          } catch (err) {
+            console.log(`  ✗ Remote connection failed: ${err}`);
+            console.log('  Continuing in TOTP-only mode. You can configure remote later.\n');
+          }
+        }
+      }
+
       rl.close();
 
       // Detect shell
       const shell = process.env.SHELL ?? '';
-      const shellName = shell.includes('zsh') ? 'zsh' : 'bash';
       const rcFile = shell.includes('zsh') ? '~/.zshrc' : '~/.bashrc';
 
       console.log('\n🎉 YesPaPa is active! Your shell is now guarded.');

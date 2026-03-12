@@ -14,6 +14,9 @@ import { validateCode } from '../totp/index.js';
 import { startDaemonServer, SOCKET_PATH } from './socket.js';
 import { startHeartbeat } from './heartbeat.js';
 import { appendFileSync } from 'node:fs';
+import { initializeSupabase } from '../supabase/index.js';
+import { pushCommand, syncCommandResolution, subscribeToApprovals } from '../supabase/sync.js';
+import { createReconnectManager } from '../supabase/reconnect.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -57,8 +60,51 @@ async function main(): Promise<void> {
       return active.some((gp) => gp.scope === 'all' || gp.scope === bundle);
     };
 
-    // Start socket server
-    await startDaemonServer(db, totpValidator, graceChecker);
+    // Connect to Supabase if configured
+    const supabaseUrl = getConfig(db, 'supabase_url');
+    const supabaseAnonKey = getConfig(db, 'supabase_anon_key');
+    const supabaseHostId = getConfig(db, 'supabase_host_id');
+
+    let onCommandPending: ((id: string, cmd: string, justification?: string) => void) | undefined;
+    let onCommandResolved: ((id: string, status: string, source?: string) => void) | undefined;
+
+    if (supabaseUrl && supabaseAnonKey && supabaseHostId) {
+      try {
+        const supabase = initializeSupabase(supabaseUrl, supabaseAnonKey);
+        const reconnector = createReconnectManager(
+          supabase,
+          supabaseHostId,
+          totpValidator,
+          (state) => log(`Remote connection: ${state}`),
+          (cmdId, status, message) => {
+            log(`Remote resolution: ${cmdId} → ${status}${message ? ` (${message})` : ''}`);
+          },
+        );
+        reconnector.connect();
+        log(`Remote server connected (host: ${supabaseHostId})`);
+
+        // Push pending commands to Supabase
+        onCommandPending = (cmdId, cmd, justification) => {
+          pushCommand(supabase, supabaseHostId, cmdId, cmd, justification).catch((err) => {
+            log(`Failed to push command to remote: ${err}`);
+          });
+        };
+
+        // Sync locally-resolved commands to Supabase
+        onCommandResolved = (cmdId, status, source) => {
+          syncCommandResolution(supabase, cmdId, status, source).catch((err) => {
+            log(`Failed to sync resolution to remote: ${err}`);
+          });
+        };
+      } catch (err) {
+        log(`Remote connection failed: ${err}. Continuing in TOTP-only mode.`);
+      }
+    } else {
+      log('No remote server configured. Running in TOTP-only mode.');
+    }
+
+    // Start socket server (with optional Supabase hooks)
+    await startDaemonServer(db, totpValidator, graceChecker, SOCKET_PATH, onCommandPending, onCommandResolved);
     log(`Daemon started (PID: ${process.pid}, socket: ${SOCKET_PATH})`);
 
     // Start heartbeat

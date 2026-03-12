@@ -46,6 +46,8 @@ export interface RemoteResolution {
 
 export type TotpValidator = (code: string) => boolean;
 export type GraceChecker = (bundle?: string) => boolean;
+export type OnCommandPending = (commandId: string, command: string, justification?: string) => void;
+export type OnCommandResolved = (commandId: string, status: string, source?: string) => void;
 
 // Track remotely resolved commands (set by sync module when Supabase approval arrives)
 const remoteResolutions = new Map<string, RemoteResolution>();
@@ -82,6 +84,8 @@ export function createDaemonServer(
   db: Database.Database,
   validateTotp: TotpValidator,
   checkGrace: GraceChecker,
+  onCommandPending?: OnCommandPending,
+  onCommandResolved?: OnCommandResolved,
 ): Server {
   // Track pending commands waiting for TOTP
   const pendingCommands = new Map<string, { command: string; bundle?: string }>();
@@ -98,7 +102,7 @@ export function createDaemonServer(
 
       for (const line of lines) {
         if (line.trim()) {
-          handleMessage(db, socket, line.trim(), validateTotp, checkGrace, pendingCommands);
+          handleMessage(db, socket, line.trim(), validateTotp, checkGrace, pendingCommands, onCommandPending, onCommandResolved);
         }
       }
     });
@@ -116,6 +120,8 @@ function handleMessage(
   validateTotp: TotpValidator,
   checkGrace: GraceChecker,
   pendingCommands: Map<string, { command: string; bundle?: string }>,
+  onCommandPending?: OnCommandPending,
+  onCommandResolved?: OnCommandResolved,
 ): void {
   let msg: Record<string, unknown>;
   try {
@@ -158,6 +164,7 @@ function handleMessage(
     if (validateTotp(submission.totp)) {
       pendingCommands.delete(submission.id);
       resolveCommand(db, submission.id, 'approved', 'totp_stdin');
+      onCommandResolved?.(submission.id, 'approved', 'totp_stdin');
       sendResponse(socket, { status: 'approved', id: submission.id, command: pending.command });
     } else {
       sendResponse(socket, { status: 'denied', message: 'Invalid TOTP code', id: submission.id, command: pending.command });
@@ -191,6 +198,7 @@ function handleMessage(
   // Needs TOTP — log command and ask interceptor to prompt user
   createCommand(db, commandId, cmdStr, justification);
   pendingCommands.set(commandId, { command: cmdStr, bundle });
+  onCommandPending?.(commandId, cmdStr, justification);
   sendResponse(socket, {
     status: 'needs_totp',
     id: commandId,
@@ -212,13 +220,15 @@ export function startDaemonServer(
   validateTotp: TotpValidator,
   checkGrace: GraceChecker,
   socketPath: string = SOCKET_PATH,
+  onCommandPending?: OnCommandPending,
+  onCommandResolved?: OnCommandResolved,
 ): Promise<Server> {
   // Clean up stale socket
   if (existsSync(socketPath)) {
     unlinkSync(socketPath);
   }
 
-  const server = createDaemonServer(db, validateTotp, checkGrace);
+  const server = createDaemonServer(db, validateTotp, checkGrace, onCommandPending, onCommandResolved);
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);

@@ -32,7 +32,13 @@ export const statusCommand = new Command('status')
     console.log(`  Daemon:        ${daemonRunning ? '✓ running' : '✗ stopped'} (PID: ${daemonPid ?? 'none'})`);
     console.log(`  Socket:        ${socketExists ? '✓ active' : '✗ not found'} (${SOCKET_PATH})`);
     console.log(`  Interceptor:   ${interceptorInstalled ? '✓ installed' : '✗ not installed'}`);
-    console.log(`  Remote:        offline (not configured)`);
+    const supabaseUrl = getConfig(db, 'supabase_url');
+    const supabaseHostId = getConfig(db, 'supabase_host_id');
+    if (supabaseUrl && supabaseHostId) {
+      console.log(`  Remote:        ✓ configured (host: ${supabaseHostId})`);
+    } else {
+      console.log(`  Remote:        offline (not configured)`);
+    }
     console.log(`  Pending:       ${pending.length} command(s)`);
     console.log(`  Grace periods: ${graceActive.length} active`);
 
