@@ -16,7 +16,7 @@ import { validateGraceToken, getGraceRemaining, type GraceToken } from '../crypt
 import type { GraceMatch } from './socket.js';
 import { startDaemonServer, SOCKET_PATH } from './socket.js';
 import { startHeartbeat } from './heartbeat.js';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, statSync, renameSync, existsSync as fsExists, unlinkSync } from 'node:fs';
 import { initializeSupabase } from '../supabase/index.js';
 import { pushCommand, syncCommandResolution, subscribeToApprovals } from '../supabase/sync.js';
 import { createReconnectManager } from '../supabase/reconnect.js';
@@ -25,9 +25,20 @@ const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
 const LOG_PATH = join(YESPAPA_DIR, 'daemon.log');
 
+const MAX_LOG_SIZE = 10 * 1024 * 1024; // 10MB
+
 function log(msg: string): void {
   const line = `[${new Date().toISOString()}] ${msg}\n`;
   try {
+    // Log rotation: if log exceeds 10MB, rotate to .old
+    try {
+      const stats = statSync(LOG_PATH);
+      if (stats.size > MAX_LOG_SIZE) {
+        const oldPath = LOG_PATH + '.old';
+        if (fsExists(oldPath)) unlinkSync(oldPath);
+        renameSync(LOG_PATH, oldPath);
+      }
+    } catch { /* file doesn't exist yet, fine */ }
     appendFileSync(LOG_PATH, line);
   } catch {
     // Can't log, ignore
@@ -53,6 +64,12 @@ async function main(): Promise<void> {
 
     // Update PID
     setConfig(db, 'daemon_pid', process.pid.toString());
+
+    // Clock skew warning: TOTP depends on accurate time
+    const skewCheck = Math.abs(Date.now() % 30000);
+    if (skewCheck < 100 || skewCheck > 29900) {
+      log('WARNING: System clock may have sub-second precision issues — TOTP codes might fail at period boundaries');
+    }
 
     // TOTP validator — closure over seed
     const totpValidator = (code: string): boolean => validateCode(seed, code);
@@ -161,14 +178,19 @@ async function main(): Promise<void> {
       log(`Tamper detected: interceptor repaired at ${result.timestamp}`);
     });
 
-    // Handle graceful shutdown
-    process.on('SIGTERM', () => {
-      log('Daemon stopping (SIGTERM)');
+    // Handle graceful shutdown with socket cleanup
+    const cleanup = (signal: string) => {
+      log(`Daemon stopping (${signal})`);
+      try {
+        if (fsExists(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
+      } catch { /* ignore */ }
       process.exit(0);
-    });
-    process.on('SIGINT', () => {
-      log('Daemon stopping (SIGINT)');
-      process.exit(0);
+    };
+    process.on('SIGTERM', () => cleanup('SIGTERM'));
+    process.on('SIGINT', () => cleanup('SIGINT'));
+    process.on('uncaughtException', (err) => {
+      log(`Uncaught exception: ${err.message}`);
+      cleanup('uncaughtException');
     });
   } catch (err) {
     log(`ERROR: ${err}`);
