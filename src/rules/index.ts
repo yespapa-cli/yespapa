@@ -36,7 +36,7 @@ export interface DefaultRule {
   pattern: string;
   bundle: string;
   reason: string;
-  match: (command: string, args: string[]) => boolean;
+  match: (command: string, args: string[], fullCommand?: string) => boolean;
 }
 
 export const DEFAULT_DENY_RULES: DefaultRule[] = [
