@@ -9,8 +9,9 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { openDatabase, setConfig, getConfig, getActiveGracePeriods, createGracePeriod, revokeGracePeriod } from '../db/index.js';
-import { decryptSeed } from '../crypto/index.js';
+import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
+import type { PasswordValidator } from './socket.js';
 import { validateGraceToken, getGraceRemaining, type GraceToken } from '../crypto/grace.js';
 import type { GraceMatch } from './socket.js';
 import { startDaemonServer, SOCKET_PATH } from './socket.js';
@@ -143,8 +144,16 @@ async function main(): Promise<void> {
       log('No remote server configured. Running in TOTP-only mode.');
     }
 
+    // Password bypass validator (if configured)
+    let passwordValidator: PasswordValidator | undefined;
+    const allowPasswordBypass = getConfig(db, 'allow_password_bypass');
+    const passwordHash = getConfig(db, 'removal_password_hash');
+    if (allowPasswordBypass === 'true' && passwordHash) {
+      passwordValidator = (input: string) => verifyPassword(input, passwordHash);
+    }
+
     // Start socket server (with optional Supabase hooks)
-    await startDaemonServer(db, totpValidator, graceChecker, SOCKET_PATH, onCommandPending, onCommandResolved);
+    await startDaemonServer(db, totpValidator, graceChecker, SOCKET_PATH, onCommandPending, onCommandResolved, passwordValidator);
     log(`Daemon started (PID: ${process.pid}, socket: ${SOCKET_PATH})`);
 
     // Start heartbeat

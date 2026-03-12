@@ -45,6 +45,7 @@ export interface RemoteResolution {
 }
 
 export type TotpValidator = (code: string) => boolean;
+export type PasswordValidator = (password: string) => Promise<boolean>;
 export interface GraceMatch {
   scope: string;
   remaining: string;
@@ -90,6 +91,7 @@ export function createDaemonServer(
   checkGrace: GraceChecker,
   onCommandPending?: OnCommandPending,
   onCommandResolved?: OnCommandResolved,
+  validatePassword?: PasswordValidator,
 ): Server {
   // Track pending commands waiting for TOTP
   const pendingCommands = new Map<string, { command: string; bundle?: string }>();
@@ -106,7 +108,7 @@ export function createDaemonServer(
 
       for (const line of lines) {
         if (line.trim()) {
-          handleMessage(db, socket, line.trim(), validateTotp, checkGrace, pendingCommands, onCommandPending, onCommandResolved);
+          handleMessage(db, socket, line.trim(), validateTotp, checkGrace, pendingCommands, onCommandPending, onCommandResolved, validatePassword);
         }
       }
     });
@@ -126,6 +128,7 @@ function handleMessage(
   pendingCommands: Map<string, { command: string; bundle?: string }>,
   onCommandPending?: OnCommandPending,
   onCommandResolved?: OnCommandResolved,
+  validatePassword?: PasswordValidator,
 ): void {
   let msg: Record<string, unknown>;
   try {
@@ -170,9 +173,27 @@ function handleMessage(
       resolveCommand(db, submission.id, 'approved', 'totp_stdin');
       onCommandResolved?.(submission.id, 'approved', 'totp_stdin');
       sendResponse(socket, { status: 'approved', id: submission.id, command: pending.command });
-    } else {
-      sendResponse(socket, { status: 'denied', message: 'Invalid TOTP code', id: submission.id, command: pending.command });
+      return;
     }
+
+    // Try password bypass if enabled
+    if (validatePassword) {
+      validatePassword(submission.totp).then((valid) => {
+        if (valid) {
+          pendingCommands.delete(submission.id);
+          resolveCommand(db, submission.id, 'approved', 'totp_stdin');
+          onCommandResolved?.(submission.id, 'approved', 'totp_stdin');
+          sendResponse(socket, { status: 'approved', id: submission.id, command: pending.command });
+        } else {
+          sendResponse(socket, { status: 'denied', message: 'Invalid TOTP code', id: submission.id, command: pending.command });
+        }
+      }).catch(() => {
+        sendResponse(socket, { status: 'denied', message: 'Invalid TOTP code', id: submission.id, command: pending.command });
+      });
+      return;
+    }
+
+    sendResponse(socket, { status: 'denied', message: 'Invalid TOTP code', id: submission.id, command: pending.command });
     return;
   }
 
@@ -233,13 +254,14 @@ export function startDaemonServer(
   socketPath: string = SOCKET_PATH,
   onCommandPending?: OnCommandPending,
   onCommandResolved?: OnCommandResolved,
+  validatePassword?: PasswordValidator,
 ): Promise<Server> {
   // Clean up stale socket
   if (existsSync(socketPath)) {
     unlinkSync(socketPath);
   }
 
-  const server = createDaemonServer(db, validateTotp, checkGrace, onCommandPending, onCommandResolved);
+  const server = createDaemonServer(db, validateTotp, checkGrace, onCommandPending, onCommandResolved, validatePassword);
 
   return new Promise((resolve, reject) => {
     server.on('error', reject);
