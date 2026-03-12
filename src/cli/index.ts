@@ -9,6 +9,7 @@ import { graceCommand } from './grace.js';
 import { execCommand, approveCommand } from './exec.js';
 import { rotateCommand } from './rotate.js';
 import { startCommand, restartCommand } from './start.js';
+import { configCommand } from './config.js';
 import { VERSION } from '../index.js';
 
 const program = new Command();
@@ -27,6 +28,7 @@ program.addCommand(graceCommand);
 program.addCommand(execCommand);
 program.addCommand(approveCommand);
 program.addCommand(rotateCommand);
+program.addCommand(configCommand);
 program.addCommand(uninstallCommand);
 
 program.parse();

@@ -39,7 +39,7 @@ describe('shell interceptor generation', () => {
   it('handles TOTP prompt in phase 2', () => {
     expect(script).toContain('needs_totp');
     expect(script).toContain('Enter TOTP code');
-    expect(script).toContain('read -r totp_code');
+    expect(script).toContain('read -r -t 30 totp_code');
   });
 
   it('uses the provided socket path', () => {

@@ -53,40 +53,73 @@ yespapa_intercept() {
   response=$(yespapa_send "$json")
   if [ -z "$response" ]; then
     echo "[YesPaPa] Daemon not running. Command blocked for safety." >&2
+    echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&2
     return 1
   fi
 
-  local yp_status
+  local yp_status yp_message
   yp_status=$(yespapa_json_field "$response" "status")
+  yp_message=$(yespapa_json_field "$response" "message")
+
   if [ "$yp_status" = "approved" ]; then
+    if [ -n "$yp_message" ]; then
+      echo "[YesPaPa] $yp_message" >&2
+    fi
     return 0
   fi
 
   if [ "$yp_status" != "needs_totp" ]; then
-    local yp_message
-    yp_message=$(yespapa_json_field "$response" "message")
     echo "[YesPaPa] Command denied: $yp_message" >&2
+    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&2
     return 1
   fi
 
-  # Phase 2: TOTP prompt in user terminal
+  # Phase 2: TOTP prompt with agent-friendly output
   local cmd_id rule
   cmd_id=$(yespapa_json_field "$response" "id")
   rule=$(yespapa_json_field "$response" "rule")
   echo "" >&2
-  echo "  [YesPaPa] Command intercepted: $full_cmd" >&2
+  echo "  ┌─────────────────────────────────────────────────┐" >&2
+  echo "  │  YesPaPa — Command Requires Human Approval      │" >&2
+  echo "  ├─────────────────────────────────────────────────┤" >&2
+  echo "  │  Command: $full_cmd" >&2
   if [ -n "$rule" ]; then
-    echo "  Rule: $rule" >&2
+    echo "  │  Rule:    $rule" >&2
   fi
+  echo "  │  ID:      $cmd_id" >&2
+  echo "  ├─────────────────────────────────────────────────┤" >&2
+  echo "  │  Enter TOTP code, or approve via YesPaPa app.   │" >&2
+  echo "  │  Tip: use --justification \\"reason\\" to help the │" >&2
+  echo "  │  approver decide.                               │" >&2
+  echo "  └─────────────────────────────────────────────────┘" >&2
   echo "" >&2
 
   local attempts=0
   while [ $attempts -lt 3 ]; do
+    # Poll for remote resolution
+    local poll_resp poll_status
+    poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}")
+    poll_status=$(yespapa_json_field "$poll_resp" "status")
+    if [ "$poll_status" = "approved" ]; then
+      local poll_msg
+      poll_msg=$(yespapa_json_field "$poll_resp" "message")
+      echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&2
+      echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&2
+      return 0
+    elif [ "$poll_status" = "denied" ]; then
+      local poll_msg
+      poll_msg=$(yespapa_json_field "$poll_resp" "message")
+      echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&2
+      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&2
+      return 1
+    fi
+
     attempts=$((attempts + 1))
     printf "  Enter TOTP code (attempt %d/3): " "$attempts" >&2
-    read -r totp_code
+    read -r -t 30 totp_code
     if [ -z "$totp_code" ]; then
       echo "  [YesPaPa] Cancelled" >&2
+      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"cancelled\\",\\"id\\":\\"$cmd_id\\"}" >&2
       return 1
     fi
     local totp_response
@@ -95,12 +128,14 @@ yespapa_intercept() {
     yp_totp_status=$(yespapa_json_field "$totp_response" "status")
     if [ "$yp_totp_status" = "approved" ]; then
       echo "  [YesPaPa] Approved" >&2
+      echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&2
       return 0
     fi
     echo "  [YesPaPa] Invalid code" >&2
   done
 
   echo "  [YesPaPa] Too many attempts. Command denied." >&2
+  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&2
   return 1
 }
 
