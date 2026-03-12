@@ -6,6 +6,9 @@ import { statusCommand } from './status.js';
 import { rulesCommand } from './rules.js';
 import { uninstallCommand } from './uninstall.js';
 import { graceCommand } from './grace.js';
+import { execCommand, approveCommand } from './exec.js';
+import { rotateCommand } from './rotate.js';
+import { startCommand, restartCommand } from './start.js';
 import { VERSION } from '../index.js';
 
 const program = new Command();
@@ -16,9 +19,14 @@ program
   .version(VERSION);
 
 program.addCommand(initCommand);
+program.addCommand(startCommand);
+program.addCommand(restartCommand);
 program.addCommand(statusCommand);
 program.addCommand(rulesCommand);
 program.addCommand(graceCommand);
+program.addCommand(execCommand);
+program.addCommand(approveCommand);
+program.addCommand(rotateCommand);
 program.addCommand(uninstallCommand);
 
 program.parse();

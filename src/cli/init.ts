@@ -146,6 +146,10 @@ export const initCommand = new Command('init')
         console.log(`  ✓ Shell interceptor injected into ${p}`);
       }
 
+      // Save password for daemon auto-restart (file permissions 0600)
+      const passwordPath = join(YESPAPA_DIR, '.daemon_password');
+      writeFileSync(passwordPath, password, { mode: 0o600 });
+
       // Start daemon as detached background process
       db.close();
       const daemonScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'daemon', 'start.js');
