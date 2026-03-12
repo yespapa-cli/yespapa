@@ -15,6 +15,9 @@ export function generateInterceptorScript(socketPath: string = SOCKET_PATH): str
   const lines: string[] = [
     MARKER_START,
     '',
+    '# Add yespapa CLI to PATH',
+    'export PATH="$HOME/.yespapa/bin:$PATH"',
+    '',
     '# Core intercept function — sends command to daemon via Unix socket',
     'yespapa_intercept() {',
     '  local full_cmd="$*"',

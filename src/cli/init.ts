@@ -1,17 +1,17 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir, hostname } from 'node:os';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { generateSeed, validateCode } from '../totp/index.js';
 import { displayTotpQR } from '../totp/qr.js';
 import { openDatabase, setConfig } from '../db/index.js';
 import { hashPassword, encryptSeed } from '../crypto/index.js';
 import { seedDefaultRules } from '../rules/index.js';
 import { injectInterceptor } from '../shell/interceptor.js';
-import { startDaemonServer, SOCKET_PATH } from '../daemon/socket.js';
-import { createApprovalHandler } from '../daemon/approval.js';
-import { decryptSeed } from '../crypto/index.js';
+import { SOCKET_PATH } from '../daemon/socket.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -116,6 +116,20 @@ export const initCommand = new Command('init')
       // Store daemon PID
       setConfig(db, 'daemon_pid', process.pid.toString());
 
+      // Create yespapa CLI wrapper in ~/.yespapa/bin/
+      const binDir = join(YESPAPA_DIR, 'bin');
+      if (!existsSync(binDir)) {
+        mkdirSync(binDir, { recursive: true });
+      }
+      const cliEntryPoint = join(dirname(fileURLToPath(import.meta.url)), 'index.js');
+      const wrapperScript = `#!/bin/sh\nexec node "${cliEntryPoint}" "$@"\n`;
+      const wrapperPath = join(binDir, 'yespapa');
+      writeFileSync(wrapperPath, wrapperScript);
+      chmodSync(wrapperPath, 0o755);
+      // Store the CLI path for the daemon start script
+      setConfig(db, 'cli_entry_point', cliEntryPoint);
+      console.log(`  ✓ CLI installed at ${wrapperPath}`);
+
       // Seed default rules
       seedDefaultRules(db);
       console.log('  ✓ Default deny-list rules installed (10 patterns)');
@@ -126,18 +140,28 @@ export const initCommand = new Command('init')
         console.log(`  ✓ Shell interceptor injected into ${p}`);
       }
 
-      // Start daemon
-      const approvalSeed = await decryptSeed(encryptedSeed, password);
-      const handler = createApprovalHandler(db, approvalSeed);
-      await startDaemonServer(db, handler);
-      console.log(`  ✓ Daemon started (socket: ${SOCKET_PATH})`);
+      // Start daemon as detached background process
+      db.close();
+      const daemonScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'daemon', 'start.js');
+      const child = fork(daemonScript, [password], {
+        detached: true,
+        stdio: 'ignore',
+      });
+      child.unref();
+      console.log(`  ✓ Daemon started in background (PID: ${child.pid}, socket: ${SOCKET_PATH})`);
+
+      rl.close();
+
+      // Detect shell
+      const shell = process.env.SHELL ?? '';
+      const shellName = shell.includes('zsh') ? 'zsh' : 'bash';
+      const rcFile = shell.includes('zsh') ? '~/.zshrc' : '~/.bashrc';
 
       console.log('\n🎉 YesPaPa is active! Your shell is now guarded.');
-      console.log('   Open a new terminal for interceptors to take effect.');
+      console.log(`\n   To activate interceptors in this terminal, run:`);
+      console.log(`   source ${rcFile}\n`);
+      console.log(`   Or open a new terminal window.\n`);
       console.log(`   Run "yespapa status" to check the current state.\n`);
-
-      // Keep daemon running (don't exit)
-      // The daemon will run until killed or "yespapa stop" is called
     } catch (error) {
       console.error('Initialization failed:', error);
       rl.close();
