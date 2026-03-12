@@ -1,18 +1,20 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { SOCKET_PATH } from '../daemon/socket.js';
 
-const MARKER_START = '# >>> YesPaPa Shell Interceptor (DO NOT EDIT)';
-const MARKER_END = '# <<< YesPaPa Shell Interceptor';
+const YESPAPA_DIR = join(homedir(), '.yespapa');
+const INTERCEPTOR_PATH = join(YESPAPA_DIR, 'interceptor.sh');
+const SOURCE_LINE = '[ -f ~/.yespapa/interceptor.sh ] && source ~/.yespapa/interceptor.sh # YesPaPa';
 
 /**
  * Generate the shell interceptor script.
  * Two-phase protocol: daemon returns needs_totp, interceptor prompts user, sends TOTP back.
  */
 export function generateInterceptorScript(socketPath: string = SOCKET_PATH): string {
-  // Using a plain string to avoid all the escaping issues with string arrays
-  return `${MARKER_START}
+  return `#!/bin/sh
+# YesPaPa Shell Interceptor — DO NOT EDIT
+# This file is managed by yespapa. Changes will be overwritten.
 
 # Add yespapa CLI to PATH
 export PATH="$HOME/.yespapa/bin:$PATH"
@@ -181,9 +183,7 @@ else
   if command -v yespapa >/dev/null 2>&1; then
     yespapa start --background 2>/dev/null || true
   fi
-fi
-
-${MARKER_END}`;
+fi`;
 }
 
 /**
@@ -214,10 +214,21 @@ export function getShellProfiles(): string[] {
 }
 
 /**
- * Inject the interceptor script into shell profiles.
+ * Write the interceptor script to ~/.yespapa/interceptor.sh
+ * and add a single source line to shell profiles.
  */
 export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
   const script = generateInterceptorScript(socketPath);
+
+  // Ensure ~/.yespapa/ exists
+  if (!existsSync(YESPAPA_DIR)) {
+    mkdirSync(YESPAPA_DIR, { recursive: true });
+  }
+
+  // Write the interceptor script to ~/.yespapa/interceptor.sh
+  writeFileSync(INTERCEPTOR_PATH, script, { mode: 0o755 });
+
+  // Add source line to shell profiles
   const profiles = getShellProfiles();
   const injected: string[] = [];
 
@@ -227,15 +238,23 @@ export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
       content = readFileSync(profile, 'utf-8');
     }
 
-    if (content.includes(MARKER_START)) {
-      const regex = new RegExp(
-        escapeRegex(MARKER_START) + '[\\s\\S]*?' + escapeRegex(MARKER_END),
-      );
-      content = content.replace(regex, script);
-    } else {
-      content = content.trimEnd() + '\n\n' + script + '\n';
+    if (content.includes(SOURCE_LINE)) {
+      // Already present, just update the script file
+      injected.push(profile);
+      continue;
     }
 
+    // Remove legacy inline block if present (migration from old format)
+    const LEGACY_START = '# >>> YesPaPa Shell Interceptor (DO NOT EDIT)';
+    const LEGACY_END = '# <<< YesPaPa Shell Interceptor';
+    if (content.includes(LEGACY_START)) {
+      const regex = new RegExp(
+        '\\n*' + escapeRegex(LEGACY_START) + '[\\s\\S]*?' + escapeRegex(LEGACY_END) + '\\n*',
+      );
+      content = content.replace(regex, '\n');
+    }
+
+    content = content.trimEnd() + '\n' + SOURCE_LINE + '\n';
     writeFileSync(profile, content);
     injected.push(profile);
   }
@@ -244,7 +263,8 @@ export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
 }
 
 /**
- * Remove the interceptor script from shell profiles.
+ * Remove the source line from shell profiles.
+ * The interceptor.sh file in ~/.yespapa/ is left for deletion with the directory.
  */
 export function removeInterceptor(): string[] {
   const profiles = getShellProfiles();
@@ -254,13 +274,27 @@ export function removeInterceptor(): string[] {
     if (!existsSync(profile)) continue;
 
     let content = readFileSync(profile, 'utf-8');
-    if (content.includes(MARKER_START)) {
+
+    // Remove the source line
+    if (content.includes(SOURCE_LINE)) {
+      content = content
+        .split('\n')
+        .filter((line) => line !== SOURCE_LINE)
+        .join('\n');
+      writeFileSync(profile, content);
+      removed.push(profile);
+    }
+
+    // Also clean up legacy inline block if present
+    const LEGACY_START = '# >>> YesPaPa Shell Interceptor (DO NOT EDIT)';
+    const LEGACY_END = '# <<< YesPaPa Shell Interceptor';
+    if (content.includes(LEGACY_START)) {
       const regex = new RegExp(
-        '\\n*' + escapeRegex(MARKER_START) + '[\\s\\S]*?' + escapeRegex(MARKER_END) + '\\n*',
+        '\\n*' + escapeRegex(LEGACY_START) + '[\\s\\S]*?' + escapeRegex(LEGACY_END) + '\\n*',
       );
       content = content.replace(regex, '\n');
       writeFileSync(profile, content);
-      removed.push(profile);
+      if (!removed.includes(profile)) removed.push(profile);
     }
   }
 
@@ -271,11 +305,15 @@ export function removeInterceptor(): string[] {
  * Check if the interceptor is installed in all shell profiles.
  */
 export function isInterceptorInstalled(): boolean {
+  // Check that the script file exists
+  if (!existsSync(INTERCEPTOR_PATH)) return false;
+
+  // Check that source line is in all shell profiles
   const profiles = getShellProfiles();
   for (const profile of profiles) {
     if (!existsSync(profile)) return false;
     const content = readFileSync(profile, 'utf-8');
-    if (!content.includes(MARKER_START)) return false;
+    if (!content.includes(SOURCE_LINE)) return false;
   }
   return true;
 }

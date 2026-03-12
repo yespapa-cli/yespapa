@@ -67,21 +67,23 @@ export const uninstallCommand = new Command('uninstall')
 
       console.log('\n✓ Authentication successful. Uninstalling...\n');
 
-      // Remove interceptor from shell profiles
-      const removed = removeInterceptor();
-      for (const p of removed) {
-        console.log(`  ✓ Removed interceptor from ${p}`);
-      }
-
-      // Stop daemon
+      // Stop daemon FIRST to prevent heartbeat from re-injecting interceptor
       const daemonPid = getConfig(db, 'daemon_pid');
       if (daemonPid) {
         try {
           process.kill(parseInt(daemonPid, 10), 'SIGTERM');
           console.log(`  ✓ Stopped daemon (PID: ${daemonPid})`);
+          // Brief wait for daemon to exit before removing interceptor
+          await new Promise((resolve) => setTimeout(resolve, 500));
         } catch {
           console.log(`  - Daemon not running (PID: ${daemonPid})`);
         }
+      }
+
+      // Remove interceptor from shell profiles (after daemon is stopped)
+      const removed = removeInterceptor();
+      for (const p of removed) {
+        console.log(`  ✓ Removed interceptor from ${p}`);
       }
 
       // Close database before deleting

@@ -4,9 +4,8 @@ import { generateInterceptorScript } from '../shell/interceptor.js';
 describe('shell interceptor generation', () => {
   const script = generateInterceptorScript('/tmp/yespapa-test.sock');
 
-  it('contains start and end markers', () => {
-    expect(script).toContain('# >>> YesPaPa Shell Interceptor');
-    expect(script).toContain('# <<< YesPaPa Shell Interceptor');
+  it('starts with a shebang', () => {
+    expect(script).toMatch(/^#!\/bin\/sh/);
   });
 
   it('contains the core intercept function', () => {
