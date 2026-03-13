@@ -76,7 +76,7 @@ export const startCommand = new Command('start')
 
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      const password = await prompt(rl, 'Enter removal password to start daemon: ');
+      const password = await prompt(rl, 'Enter master key to start daemon: ');
       spawnDaemon(password);
 
       // Save password for future auto-starts
@@ -122,7 +122,7 @@ export const restartCommand = new Command('restart')
     // Prompt
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      const password = await prompt(rl, 'Enter removal password: ');
+      const password = await prompt(rl, 'Enter master key: ');
       spawnDaemon(password);
       writeFileSync(PASSWORD_PATH, password, { mode: 0o600 });
       console.log('Daemon restarted.');

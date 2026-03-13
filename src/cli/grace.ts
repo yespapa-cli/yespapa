@@ -53,11 +53,11 @@ const activateCommand = new Command('activate')
         process.exit(1);
       }
 
-      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      const input = await prompt(rl, 'Enter TOTP code or master key: ');
       let seed!: string;
 
       // Try as password first — gives us both auth and seed decryption
-      const passwordHash = getConfig(db, 'removal_password_hash');
+      const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
       let authenticated = false;
       if (passwordHash && await verifyPassword(input, passwordHash)) {
         try {
@@ -70,8 +70,8 @@ const activateCommand = new Command('activate')
       }
 
       if (!authenticated) {
-        // Input might be TOTP — need password to decrypt seed for HMAC
-        const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
+        // Input might be TOTP — need master key to decrypt seed for HMAC
+        const password = await prompt(rl, 'Enter master key to decrypt seed: ');
         try {
           seed = await decryptSeed(encryptedSeed, password);
         } catch {
@@ -161,9 +161,9 @@ const revokeCommand = new Command('revoke')
         return;
       }
 
-      // Require TOTP or password
-      const passwordHash = getConfig(db, 'removal_password_hash');
-      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      // Require TOTP or master key
+      const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
+      const input = await prompt(rl, 'Enter TOTP code or master key: ');
       let authenticated = false;
 
       // Try as password
@@ -178,7 +178,7 @@ const revokeCommand = new Command('revoke')
           console.log('No TOTP seed found.');
           process.exit(1);
         }
-        const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
+        const password = await prompt(rl, 'Enter master key to decrypt seed: ');
         let seed: string;
         try {
           seed = await decryptSeed(encryptedSeed, password);

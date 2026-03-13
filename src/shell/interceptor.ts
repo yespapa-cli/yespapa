@@ -97,7 +97,7 @@ yespapa_intercept() {
   fi
   echo "  │  ID:      $cmd_id" >&2
   echo "  ├─────────────────────────────────────────────────┤" >&2
-  echo "  │  Enter TOTP code or removal password, or        │" >&2
+  echo "  │  Enter TOTP code or master key, or              │" >&2
   echo "  │  approve via YesPaPa app.                      │" >&2
   echo "  │  Tip: use --justification \\"reason\\" to help the │" >&2
   echo "  │  approver decide.                               │" >&2

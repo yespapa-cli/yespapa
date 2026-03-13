@@ -194,7 +194,7 @@ export const execCommand = new Command('exec')
 // ── yespapa approve ────────────────────────────
 
 export const approveCommand = new Command('approve')
-  .description('Approve a pending command by ID (requires TOTP or removal password)')
+  .description('Approve a pending command by ID (requires TOTP or master key)')
   .argument('<command_id>', 'Command ID to approve (e.g., cmd_a1b2c3d4)')
   .action(async (commandId: string) => {
     if (!existsSync(SOCKET_PATH)) {
@@ -204,7 +204,7 @@ export const approveCommand = new Command('approve')
 
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      const input = await prompt(rl, 'Enter TOTP code or master key: ');
 
       // Send to daemon — it handles both TOTP and password validation
       const response = await sendToDaemon({ totp: input.trim(), id: commandId });

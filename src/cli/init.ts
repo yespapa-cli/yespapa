@@ -79,16 +79,16 @@ export const initCommand = new Command('init')
         process.exit(1);
       }
 
-      // Step 4: Set removal password
-      console.log('Step 4/5: Set a removal password (for recovery if you lose your authenticator)');
+      // Step 4: Set master key
+      console.log('Step 4/5: Set a master key (for recovery if you lose your authenticator)');
       let password = '';
       while (true) {
-        password = await promptPassword(rl, 'Set removal password (min 8 chars): ');
+        password = await promptPassword(rl, 'Set master key (min 8 chars): ');
         if (password.length < 8) {
           console.log('Password must be at least 8 characters.');
           continue;
         }
-        const confirm = await promptPassword(rl, 'Confirm removal password: ');
+        const confirm = await promptPassword(rl, 'Confirm master key: ');
         if (password !== confirm) {
           console.log('Passwords do not match. Try again.');
           continue;
@@ -115,9 +115,9 @@ export const initCommand = new Command('init')
       const encryptedSeed = await encryptSeed(seed, password);
       setConfig(db, 'totp_seed', encryptedSeed);
 
-      // Store removal password hash
+      // Store master key hash
       const passwordHash = await hashPassword(password);
-      setConfig(db, 'removal_password_hash', passwordHash);
+      setConfig(db, 'master_key_hash', passwordHash);
 
       // Store daemon PID
       setConfig(db, 'daemon_pid', process.pid.toString());

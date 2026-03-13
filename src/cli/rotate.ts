@@ -40,12 +40,12 @@ export const rotateCommand = new Command('rotate-seed')
 
       // Step 1: Verify identity
       console.log('\n  Step 1: Verify identity\n');
-      const input = await prompt(rl, '  Enter TOTP code or removal password: ');
+      const input = await prompt(rl, '  Enter TOTP code or master key: ');
       let password!: string;
       let oldSeed!: string;
 
       // Try as password — gives us both auth and seed decryption
-      const passwordHash = getConfig(db, 'removal_password_hash');
+      const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
       let authenticated = false;
       if (passwordHash && await verifyPassword(input, passwordHash)) {
         try {
@@ -60,7 +60,7 @@ export const rotateCommand = new Command('rotate-seed')
 
       if (!authenticated) {
         // Input might be TOTP — need password to decrypt seed
-        password = await prompt(rl, '  Enter removal password: ');
+        password = await prompt(rl, '  Enter master key: ');
         try {
           oldSeed = await decryptSeed(encryptedSeed, password);
         } catch {

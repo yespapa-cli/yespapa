@@ -43,18 +43,18 @@ const setCommand = new Command('set')
         process.exit(1);
       }
 
-      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      const input = await prompt(rl, 'Enter TOTP code or master key: ');
       let authenticated = false;
 
       // Try as password
-      const passwordHash = getConfig(db, 'removal_password_hash');
+      const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
       if (passwordHash && await verifyPassword(input, passwordHash)) {
         authenticated = true;
       }
 
       if (!authenticated) {
         // Try as TOTP — need password to decrypt seed
-        const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
+        const password = await prompt(rl, 'Enter master key to decrypt seed: ');
         let seed: string;
         try {
           seed = await decryptSeed(encryptedSeed, password);

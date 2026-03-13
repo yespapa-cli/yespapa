@@ -21,7 +21,7 @@ const KDF_OPTIONS: argon2.Options & { raw: true } = {
 };
 
 /**
- * Hash a removal password using Argon2id.
+ * Hash a master key using Argon2id.
  * Returns the encoded hash string (includes salt, params, hash).
  */
 export async function hashPassword(password: string): Promise<string> {

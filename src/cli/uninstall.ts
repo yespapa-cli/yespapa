@@ -18,7 +18,7 @@ function prompt(rl: ReturnType<typeof createInterface>, question: string): Promi
 }
 
 export const uninstallCommand = new Command('uninstall')
-  .description('Uninstall YesPaPa (requires TOTP or removal password)')
+  .description('Uninstall YesPaPa (requires TOTP or master key)')
   .action(async () => {
     if (!existsSync(DB_PATH)) {
       console.log('YesPaPa is not installed.');
@@ -32,8 +32,8 @@ export const uninstallCommand = new Command('uninstall')
       console.log('\n🔒 YesPaPa — Uninstall\n');
       console.log('Authentication required to uninstall.\n');
 
-      const passwordHash = getConfig(db, 'removal_password_hash');
-      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
+      const input = await prompt(rl, 'Enter TOTP code or master key: ');
 
       let authenticated = false;
 

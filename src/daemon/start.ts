@@ -199,7 +199,7 @@ async function main(): Promise<void> {
 
     // Password bypass validator — always enabled when a password hash exists
     let passwordValidator: PasswordValidator | undefined;
-    const passwordHash = getConfig(db, 'removal_password_hash');
+    const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
     if (passwordHash) {
       passwordValidator = (input: string) => verifyPassword(input, passwordHash);
     }
