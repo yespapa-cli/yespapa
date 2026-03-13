@@ -5,7 +5,7 @@ import { homedir } from 'node:os';
 import { existsSync, rmSync } from 'node:fs';
 import { openDatabase, getConfig } from '../db/index.js';
 import { verifyPassword } from '../crypto/index.js';
-import { writeCleanupInterceptor } from '../shell/interceptor.js';
+import { removeInterceptor, INTERCEPTOR_FUNCTIONS } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
@@ -123,11 +123,11 @@ export const uninstallCommand = new Command('uninstall')
         }
       }
 
-      // Write cleanup interceptor that will run on next `source ~/.zshrc` or new terminal.
-      // It unsets shell functions, removes the source line from profiles, and self-deletes.
-      // The source line is intentionally LEFT in place so sourcing the profile triggers cleanup.
-      writeCleanupInterceptor();
-      console.log(`  ✓ Wrote cleanup interceptor`);
+      // Remove source line from shell profiles
+      const removedProfiles = removeInterceptor();
+      for (const p of removedProfiles) {
+        console.log(`  ✓ Removed source line from ${p}`);
+      }
 
       // Close database before deleting
       db.close();
@@ -138,16 +138,15 @@ export const uninstallCommand = new Command('uninstall')
         console.log(`  ✓ Removed socket (${SOCKET_PATH})`);
       }
 
-      // Delete ~/.yespapa/ contents EXCEPT interceptor.sh (needed for cleanup on next source)
-      const { readdirSync } = await import('node:fs');
-      for (const entry of readdirSync(YESPAPA_DIR)) {
-        if (entry === 'interceptor.sh') continue;
-        rmSync(join(YESPAPA_DIR, entry), { recursive: true, force: true });
+      // Delete entire ~/.yespapa/ directory
+      if (existsSync(YESPAPA_DIR)) {
+        rmSync(YESPAPA_DIR, { recursive: true, force: true });
+        console.log(`  ✓ Removed ${YESPAPA_DIR}`);
       }
-      console.log(`  ✓ Removed ${YESPAPA_DIR} contents`);
 
       console.log('\n🗑️  YesPaPa has been completely uninstalled.\n');
-      console.log('Run `source ~/.zshrc` or open a new terminal to finish cleanup.\n');
+      console.log('Open a new terminal to complete cleanup, or run:');
+      console.log(`  unset -f ${INTERCEPTOR_FUNCTIONS.join(' ')}\n`);
     } catch (error) {
       console.error('Uninstall failed:', error);
       process.exit(1);

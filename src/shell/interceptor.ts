@@ -44,17 +44,22 @@ yespapa_json_field() {
   fi
 }
 
-# Core intercept function — wraps inner to suppress xtrace noise
+# Core intercept function — wraps inner to suppress all trace noise
 yespapa_intercept() {
-  local _yp_save_xtrace=""
-  case "$-" in *x*) _yp_save_xtrace=1; set +x;; esac
-  _yp_intercept_inner "$@"
+  local _yp_save_opts=""
+  case "$-" in *x*) _yp_save_opts="\${_yp_save_opts}x";; esac
+  case "$-" in *v*) _yp_save_opts="\${_yp_save_opts}v";; esac
+  [ -n "$_yp_save_opts" ] && set +$_yp_save_opts
+  # fd 9 = real stderr (intentional output); fd 2 = /dev/null (silences all trace noise)
+  { _yp_intercept_inner "$@"; } 9>&2 2>/dev/null
   local _yp_rc=$?
-  [ "$_yp_save_xtrace" = "1" ] && set -x
+  [ -n "$_yp_save_opts" ] && set -$_yp_save_opts
   return $_yp_rc
 }
 
 _yp_intercept_inner() {
+  # NOTE: fd 2 is /dev/null here (set by yespapa_intercept wrapper).
+  # All intentional output uses >&9 (real stderr, also set by wrapper).
   local full_cmd="$*"
   local cmd_name="$1"
   shift
@@ -66,108 +71,107 @@ _yp_intercept_inner() {
   done
   local json="{\\"command\\":\\"$cmd_name\\",\\"args\\":[$args_json],\\"fullCommand\\":\\"$full_cmd\\"}"
 
-  # Phase 1: Send command to daemon (suppress xtrace on all assignments)
+  # Phase 1: Send command to daemon
   local response
-  { response=$(yespapa_send "$json"); } 2>/dev/null
+  response=$(yespapa_send "$json")
   if [ -z "$response" ]; then
-    echo "[YesPaPa] Daemon not running. Command blocked for safety." >&2
-    echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&2
+    echo "[YesPaPa] Daemon not running. Command blocked for safety." >&9
+    echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&9
     return 1
   fi
 
   local yp_status yp_message
-  { yp_status=$(yespapa_json_field "$response" "status"); } 2>/dev/null
-  { yp_message=$(yespapa_json_field "$response" "message"); } 2>/dev/null
+  yp_status=$(yespapa_json_field "$response" "status")
+  yp_message=$(yespapa_json_field "$response" "message")
 
   if [ "$yp_status" = "approved" ]; then
     if [ -n "$yp_message" ]; then
-      echo "[YesPaPa] $yp_message" >&2
+      echo "[YesPaPa] $yp_message" >&9
     fi
     return 0
   fi
 
   if [ "$yp_status" != "needs_totp" ]; then
-    echo "[YesPaPa] Command denied: $yp_message" >&2
-    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&2
+    echo "[YesPaPa] Command denied: $yp_message" >&9
+    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&9
     return 1
   fi
 
   # Phase 2: TOTP prompt with agent-friendly output
   local cmd_id rule
-  { cmd_id=$(yespapa_json_field "$response" "id"); } 2>/dev/null
-  { rule=$(yespapa_json_field "$response" "rule"); } 2>/dev/null
-  echo "" >&2
-  echo "  ┌─────────────────────────────────────────────────┐" >&2
-  echo "  │  YesPaPa — Command Requires Human Approval      │" >&2
-  echo "  ├─────────────────────────────────────────────────┤" >&2
-  echo "  │  Command: $full_cmd" >&2
+  cmd_id=$(yespapa_json_field "$response" "id")
+  rule=$(yespapa_json_field "$response" "rule")
+  echo "" >&9
+  echo "  ┌─────────────────────────────────────────────────┐" >&9
+  echo "  │  YesPaPa — Command Requires Human Approval      │" >&9
+  echo "  ├─────────────────────────────────────────────────┤" >&9
+  echo "  │  Command: $full_cmd" >&9
   if [ -n "$rule" ]; then
-    echo "  │  Rule:    $rule" >&2
+    echo "  │  Rule:    $rule" >&9
   fi
-  echo "  │  ID:      $cmd_id" >&2
-  echo "  ├─────────────────────────────────────────────────┤" >&2
-  echo "  │  Enter TOTP code or master key, or              │" >&2
-  echo "  │  approve via YesPaPa app.                      │" >&2
-  echo "  │  Tip: use --justification \\"reason\\" to help the │" >&2
-  echo "  │  approver decide.                               │" >&2
-  echo "  └─────────────────────────────────────────────────┘" >&2
-  echo "" >&2
+  echo "  │  ID:      $cmd_id" >&9
+  echo "  ├─────────────────────────────────────────────────┤" >&9
+  echo "  │  Enter TOTP code or master key, or              │" >&9
+  echo "  │  approve via YesPaPa app.                      │" >&9
+  echo "  │  Tip: use --justification \\"reason\\" to help the │" >&9
+  echo "  │  approver decide.                               │" >&9
+  echo "  └─────────────────────────────────────────────────┘" >&9
+  echo "" >&9
 
   local attempts=0
   local max_polls=180  # 180 polls × 1s = 3 min max wait
   local poll_count=0
-  printf "  Enter TOTP code or master key: " >&2
+  printf "  Enter TOTP code or master key: " >&9
   while [ $poll_count -lt $max_polls ]; do
-    # Poll for remote resolution (silent — { ... } 2>/dev/null suppresses xtrace of assignments)
+    # Poll for remote resolution
     local poll_resp poll_status
-    { poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}"); } 2>/dev/null
-    { poll_status=$(yespapa_json_field "$poll_resp" "status"); } 2>/dev/null
+    poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}")
+    poll_status=$(yespapa_json_field "$poll_resp" "status")
     if [ "$poll_status" = "approved" ]; then
       local poll_msg
-      { poll_msg=$(yespapa_json_field "$poll_resp" "message"); } 2>/dev/null
-      echo "" >&2
-      echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&2
-      echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&2
+      poll_msg=$(yespapa_json_field "$poll_resp" "message")
+      echo "" >&9
+      echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&9
+      echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 0
     elif [ "$poll_status" = "denied" ]; then
       local poll_msg
-      { poll_msg=$(yespapa_json_field "$poll_resp" "message"); } 2>/dev/null
-      echo "" >&2
-      echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&2
-      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&2
+      poll_msg=$(yespapa_json_field "$poll_resp" "message")
+      echo "" >&9
+      echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&9
+      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 1
     fi
 
     # Try reading TOTP input with 1-second timeout
     local totp_code=""
-    read -r -t 1 totp_code 2>/dev/null || true
+    read -r -t 1 totp_code || true
     if [ -n "$totp_code" ]; then
       attempts=$((attempts + 1))
-      local totp_response
-      { totp_response=$(yespapa_send "{\\"totp\\":\\"$totp_code\\",\\"id\\":\\"$cmd_id\\"}"); } 2>/dev/null
-      local yp_totp_status
-      { yp_totp_status=$(yespapa_json_field "$totp_response" "status"); } 2>/dev/null
+      local totp_response yp_totp_status
+      totp_response=$(yespapa_send "{\\"totp\\":\\"$totp_code\\",\\"id\\":\\"$cmd_id\\"}")
+      yp_totp_status=$(yespapa_json_field "$totp_response" "status")
       if [ "$yp_totp_status" = "approved" ]; then
-        echo "" >&2
-        echo "  [YesPaPa] Approved" >&2
-        echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&2
+        echo "" >&9
+        echo "  [YesPaPa] Approved" >&9
+        echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&9
         return 0
       fi
       if [ $attempts -ge 3 ]; then
-        echo "" >&2
-        echo "  [YesPaPa] Too many attempts. Command denied." >&2
-        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&2
+        echo "" >&9
+        echo "  [YesPaPa] Too many attempts. Command denied." >&9
+        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
         return 1
       fi
-      echo "  Invalid code or master key (attempt $attempts/3). Try again: " >&2
+      echo "  Invalid code or master key (attempt $attempts/3). Try again: " >&9
     fi
 
     poll_count=$((poll_count + 1))
   done
 
-  echo "" >&2
-  echo "  [YesPaPa] Timed out waiting for approval." >&2
-  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"id\\":\\"$cmd_id\\"}" >&2
+  echo "" >&9
+  echo "  [YesPaPa] Timed out waiting for approval." >&9
+  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"id\\":\\"$cmd_id\\"}" >&9
   return 1
 }
 
@@ -399,32 +403,6 @@ export function isInterceptorInstalled(): boolean {
     if (!hasActiveLine) return false;
   }
   return true;
-}
-
-/**
- * Replace the interceptor script with a cleanup version that unsets all
- * shell functions, removes the source line from shell profiles, and
- * self-deletes. The source line is intentionally LEFT in place so that
- * `source ~/.zshrc` (or opening a new terminal) triggers this cleanup.
- */
-export function writeCleanupInterceptor(): void {
-  if (!existsSync(YESPAPA_DIR)) {
-    mkdirSync(YESPAPA_DIR, { recursive: true });
-  }
-  const unsetLine = `unset -f ${INTERCEPTOR_FUNCTIONS.join(' ')} 2>/dev/null`;
-  // Remove the source line from all shell profiles
-  const profiles = getShellProfiles();
-  const removeCmds = profiles
-    .map((p) => `grep -v '# YesPaPa' "${p}" > "${p}.tmp" 2>/dev/null && mv "${p}.tmp" "${p}" 2>/dev/null`)
-    .join('\n');
-  const script = `#!/bin/sh
-# YesPaPa cleanup — this file will self-delete
-${unsetLine}
-${removeCmds}
-rm -f "${INTERCEPTOR_PATH}" 2>/dev/null
-rmdir "${YESPAPA_DIR}" 2>/dev/null
-`;
-  writeFileSync(INTERCEPTOR_PATH, script, { mode: 0o755 });
 }
 
 /**
