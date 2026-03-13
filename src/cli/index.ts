@@ -11,6 +11,7 @@ import { rotateCommand } from './rotate.js';
 import { startCommand, restartCommand } from './start.js';
 import { configCommand } from './config.js';
 import { testCommand } from './test.js';
+import { statsCommand } from './stats.js';
 import { VERSION } from '../index.js';
 
 const program = new Command();
@@ -31,6 +32,7 @@ program.addCommand(approveCommand);
 program.addCommand(rotateCommand);
 program.addCommand(configCommand);
 program.addCommand(testCommand);
+program.addCommand(statsCommand);
 program.addCommand(uninstallCommand);
 
 program.parse();

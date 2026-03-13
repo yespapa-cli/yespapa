@@ -182,6 +182,75 @@ export function getRecentCommands(db: Database.Database, limit: number = 5): Com
     .all(limit) as CommandLogRow[];
 }
 
+// ── Stats ──────────────────────────────────────────────────
+
+export interface CommandStats {
+  total: number;
+  approved: number;
+  denied: number;
+  timeout: number;
+  grace: number;
+  pending: number;
+  approvalRate: number;
+  avgResponseMs: number;
+  bySource: Record<string, number>;
+  busiestCommands: Array<{ command: string; count: number }>;
+}
+
+export function getCommandStats(db: Database.Database, since?: string): CommandStats {
+  const whereClause = since ? `WHERE created_at >= ?` : '';
+  const params = since ? [since] : [];
+
+  const total = (db.prepare(`SELECT COUNT(*) as c FROM command_log ${whereClause}`).get(...params) as { c: number }).c;
+
+  const statusCounts = db.prepare(
+    `SELECT status, COUNT(*) as c FROM command_log ${whereClause} GROUP BY status`
+  ).all(...params) as Array<{ status: string; c: number }>;
+
+  const statusMap: Record<string, number> = {};
+  for (const row of statusCounts) statusMap[row.status] = row.c;
+
+  const approved = (statusMap['approved'] ?? 0) + (statusMap['grace'] ?? 0);
+  const resolved = total - (statusMap['pending'] ?? 0);
+  const approvalRate = resolved > 0 ? (approved / resolved) * 100 : 0;
+
+  // Average response time (ms) for resolved commands
+  const avgRow = db.prepare(
+    `SELECT AVG(
+       (julianday(resolved_at) - julianday(created_at)) * 86400000
+     ) as avg_ms
+     FROM command_log
+     ${whereClause ? whereClause + ' AND' : 'WHERE'} resolved_at IS NOT NULL`
+  ).get(...params) as { avg_ms: number | null };
+
+  const bySourceRows = db.prepare(
+    `SELECT approval_source, COUNT(*) as c FROM command_log
+     ${whereClause ? whereClause + ' AND' : 'WHERE'} approval_source IS NOT NULL
+     GROUP BY approval_source`
+  ).all(...params) as Array<{ approval_source: string; c: number }>;
+  const bySource: Record<string, number> = {};
+  for (const row of bySourceRows) bySource[row.approval_source] = row.c;
+
+  const busiestCommands = db.prepare(
+    `SELECT command, COUNT(*) as c FROM command_log
+     ${whereClause}
+     GROUP BY command ORDER BY c DESC LIMIT 5`
+  ).all(...params) as Array<{ command: string; c: number }>;
+
+  return {
+    total,
+    approved: statusMap['approved'] ?? 0,
+    denied: statusMap['denied'] ?? 0,
+    timeout: statusMap['timeout'] ?? 0,
+    grace: statusMap['grace'] ?? 0,
+    pending: statusMap['pending'] ?? 0,
+    approvalRate: Math.round(approvalRate * 10) / 10,
+    avgResponseMs: Math.round(avgRow.avg_ms ?? 0),
+    bySource,
+    busiestCommands: busiestCommands.map((r) => ({ command: r.command, count: r.c })),
+  };
+}
+
 // ── Grace Periods ───────────────────────────────────────────
 
 export function createGracePeriod(
