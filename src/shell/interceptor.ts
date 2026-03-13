@@ -76,7 +76,7 @@ _yp_intercept_inner() {
   response=$(yespapa_send "$json")
   if [ -z "$response" ]; then
     echo "[YesPaPa] Daemon not running. Command blocked for safety." >&9
-    echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&9
+    [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&9
     return 1
   fi
 
@@ -93,7 +93,7 @@ _yp_intercept_inner() {
 
   if [ "$yp_status" != "needs_totp" ]; then
     echo "[YesPaPa] Command denied: $yp_message" >&9
-    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&9
+    [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&9
     return 1
   fi
 
@@ -131,13 +131,13 @@ _yp_intercept_inner() {
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&9
-      echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
+      [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 0
     elif [ "$poll_status" = "denied" ]; then
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&9
-      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
+      [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 1
     fi
 
@@ -151,13 +151,13 @@ _yp_intercept_inner() {
       if [ "$yp_totp_status" = "approved" ]; then
         echo "" >&9
         echo "  [YesPaPa] Approved" >&9
-        echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&9
+        [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&9
         return 0
       fi
       if [ $attempts -ge 3 ]; then
         echo "" >&9
         echo "  [YesPaPa] Too many attempts. Command denied." >&9
-        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
+        [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
         return 1
       fi
       echo "  Invalid code or master key (attempt $attempts/3). Try again: " >&9
@@ -168,7 +168,7 @@ _yp_intercept_inner() {
 
   echo "" >&9
   echo "  [YesPaPa] Timed out waiting for approval." >&9
-  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"id\\":\\"$cmd_id\\"}" >&9
+  [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"id\\":\\"$cmd_id\\"}" >&9
   return 1
 }
 
