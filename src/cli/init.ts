@@ -13,7 +13,7 @@ import { seedDefaultRules } from '../rules/index.js';
 import { injectInterceptor } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
 import { initializeSupabase, authenticateAnonymous, registerHost, generateHostFingerprint } from '../supabase/index.js';
-import { generatePairingToken, createPairingPayload, generatePairingQR, storePairingToken } from '../supabase/pairing.js';
+import { generatePairingToken, createCombinedPayload, generateCombinedQR, storePairingToken } from '../supabase/pairing.js';
 
 // Default remote server (YesPaPa management server, currently backed by Supabase)
 const DEFAULT_REMOTE_URL = 'https://izvdpjcqrrcxhokwycgu.supabase.co';
@@ -53,16 +53,90 @@ export const initCommand = new Command('init')
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
-      // Step 1: Generate TOTP seed
+      // Step 1: Generate TOTP seed (silent)
       console.log('Step 1/5: Generating TOTP seed...');
       const seed = generateSeed();
+      const hostName = options.hostName ?? getDefaultHostName();
 
-      // Step 2: Display QR code
-      console.log('Step 2/5: Scan this QR code with your authenticator app');
-      await displayTotpQR(seed, options.hostName ?? getDefaultHostName());
+      // Step 2: Set master key (before QR, so user gets it out of the way)
+      console.log('Step 2/5: Set a master key (for recovery if you lose your authenticator)');
+      let password = '';
+      while (true) {
+        password = await promptPassword(rl, 'Set master key (min 8 chars): ');
+        if (password.length < 8) {
+          console.log('Password must be at least 8 characters.');
+          continue;
+        }
+        const confirm = await promptPassword(rl, 'Confirm master key: ');
+        if (password !== confirm) {
+          console.log('Passwords do not match. Try again.');
+          continue;
+        }
+        break;
+      }
 
-      // Step 3: Verify TOTP
-      console.log('Step 3/5: Verify your authenticator is set up correctly');
+      // Step 3: Pair with mobile app? (default YES)
+      console.log('\nStep 3/5: Pair with YesPaPa mobile app');
+      const connectRemote = await prompt(rl, 'Pair with YesPaPa mobile app? (Y/n): ');
+      const wantsMobile = connectRemote.trim().toLowerCase() !== 'n';
+
+      let supabaseUrl: string | undefined;
+      let supabaseKey: string | undefined;
+      let supabaseHostId: string | undefined;
+      let supabaseUserId: string | undefined;
+      let supabaseRefreshToken: string | undefined;
+
+      if (wantsMobile) {
+        // YES path: connect to remote, display combined QR, verify TOTP
+        const urlInput = await prompt(rl, `Remote server URL [${DEFAULT_REMOTE_URL}]: `);
+        supabaseUrl = urlInput.trim() || DEFAULT_REMOTE_URL;
+        const keyInput = await prompt(rl, `Remote server key [default]: `);
+        supabaseKey = keyInput.trim() || DEFAULT_REMOTE_KEY;
+
+        try {
+          console.log('\n  Connecting to remote server...');
+          const supabase = initializeSupabase(supabaseUrl, supabaseKey);
+
+          const { userId, refreshToken } = await authenticateAnonymous();
+          console.log('  ✓ Authenticated with remote server');
+          supabaseUserId = userId;
+          supabaseRefreshToken = refreshToken;
+
+          const hostRecord = await registerHost(hostName, generateHostFingerprint());
+          console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
+          supabaseHostId = hostRecord.id;
+
+          // Generate combined QR (TOTP seed + pairing data in one scan)
+          const pairingToken = generatePairingToken();
+          await storePairingToken(supabase, hostRecord.id, pairingToken);
+          const combinedPayload = createCombinedPayload(
+            seed, hostName, supabaseUrl, supabaseKey,
+            hostRecord.id, pairingToken, refreshToken,
+          );
+          const qrStr = await generateCombinedQR(combinedPayload);
+          console.log('\n  Scan this QR code with the YesPaPa mobile app:');
+          console.log('  (It contains both TOTP seed and pairing data — one scan does it all)\n');
+          console.log(qrStr);
+
+          // Also show text fallback for paste
+          console.log(`\n  Can't scan? Paste this in the app: ${JSON.stringify(combinedPayload)}\n`);
+        } catch (err) {
+          console.log(`  ✗ Remote connection failed: ${err}`);
+          console.log('  Falling back to standard TOTP QR. You can configure remote later.\n');
+          supabaseUrl = undefined;
+          supabaseKey = undefined;
+
+          // Fall back to standard otpauth:// QR
+          await displayTotpQR(seed, hostName);
+        }
+      } else {
+        // NO path: standard otpauth:// QR
+        console.log('\nScan this QR code with your authenticator app (Google Authenticator, Authy, etc.)');
+        await displayTotpQR(seed, hostName);
+      }
+
+      // Verify TOTP (required regardless of path)
+      console.log('Step 4/5: Verify your authenticator is set up correctly');
       let verified = false;
       for (let attempt = 1; attempt <= 3; attempt++) {
         const code = await prompt(rl, `Enter current TOTP code (attempt ${attempt}/3): `);
@@ -79,25 +153,8 @@ export const initCommand = new Command('init')
         process.exit(1);
       }
 
-      // Step 4: Set master key
-      console.log('Step 4/5: Set a master key (for recovery if you lose your authenticator)');
-      let password = '';
-      while (true) {
-        password = await promptPassword(rl, 'Set master key (min 8 chars): ');
-        if (password.length < 8) {
-          console.log('Password must be at least 8 characters.');
-          continue;
-        }
-        const confirm = await promptPassword(rl, 'Confirm master key: ');
-        if (password !== confirm) {
-          console.log('Passwords do not match. Try again.');
-          continue;
-        }
-        break;
-      }
-
-      // Step 5: Store everything and set up
-      console.log('\nStep 5/5: Setting up...');
+      // Step 5: Store everything, inject interceptor, start daemon
+      console.log('Step 5/5: Setting up...');
 
       // Create directory
       if (!existsSync(YESPAPA_DIR)) {
@@ -108,7 +165,6 @@ export const initCommand = new Command('init')
       const db = openDatabase(DB_PATH);
 
       // Store config
-      const hostName = options.hostName ?? getDefaultHostName();
       setConfig(db, 'host_id', hostName);
 
       // Encrypt and store seed
@@ -132,7 +188,6 @@ export const initCommand = new Command('init')
       const wrapperPath = join(binDir, 'yespapa');
       writeFileSync(wrapperPath, wrapperScript);
       chmodSync(wrapperPath, 0o755);
-      // Store the CLI path for the daemon start script
       setConfig(db, 'cli_entry_point', cliEntryPoint);
       console.log(`  ✓ CLI installed at ${wrapperPath}`);
 
@@ -146,11 +201,21 @@ export const initCommand = new Command('init')
         console.log(`  ✓ Shell interceptor injected into ${p}`);
       }
 
+      // Store Supabase config (if connected) BEFORE starting daemon
+      if (supabaseUrl && supabaseKey && supabaseHostId) {
+        setConfig(db, 'supabase_url', supabaseUrl);
+        setConfig(db, 'supabase_anon_key', supabaseKey);
+        setConfig(db, 'supabase_host_id', supabaseHostId);
+        if (supabaseUserId) setConfig(db, 'supabase_user_id', supabaseUserId);
+        if (supabaseRefreshToken) setConfig(db, 'supabase_refresh_token', supabaseRefreshToken);
+        console.log('  ✓ Remote server configured');
+      }
+
       // Save password for daemon auto-restart (file permissions 0600)
       const passwordPath = join(YESPAPA_DIR, '.daemon_password');
       writeFileSync(passwordPath, password, { mode: 0o600 });
 
-      // Start daemon as detached background process
+      // Start daemon once (Supabase config already in DB, no restart needed)
       db.close();
       const daemonScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'daemon', 'start.js');
       const child = spawn(process.execPath, [daemonScript, password], {
@@ -159,64 +224,6 @@ export const initCommand = new Command('init')
       });
       child.unref();
       console.log(`  ✓ Daemon started in background (PID: ${child.pid}, socket: ${SOCKET_PATH})`);
-
-      // Optional: Connect to remote management server (Supabase)
-      const connectRemote = await prompt(rl, 'Connect to YesPaPa mobile app? (y/N): ');
-      if (connectRemote.trim().toLowerCase() === 'y') {
-        const urlInput = await prompt(rl, `Remote server URL [${DEFAULT_REMOTE_URL}]: `);
-        const supabaseUrl = urlInput.trim() || DEFAULT_REMOTE_URL;
-        const keyInput = await prompt(rl, `Remote server key [default]: `);
-        const supabaseKey = keyInput.trim() || DEFAULT_REMOTE_KEY;
-
-        if (supabaseUrl && supabaseKey) {
-          try {
-            console.log('\n  Connecting to remote server...');
-            const supabase = initializeSupabase(supabaseUrl.trim(), supabaseKey.trim());
-
-            // Authenticate anonymously
-            const { userId, refreshToken } = await authenticateAnonymous();
-            console.log('  ✓ Authenticated with remote server');
-
-            // Register host
-            const hostRecord = await registerHost(hostName, generateHostFingerprint());
-            console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
-
-            // Generate pairing token and QR
-            const pairingToken = generatePairingToken();
-            await storePairingToken(supabase, hostRecord.id, pairingToken);
-            const payload = createPairingPayload(supabaseUrl.trim(), supabaseKey.trim(), hostRecord.id, pairingToken, refreshToken);
-            const qrStr = await generatePairingQR(payload);
-            console.log('\n  Scan this QR code with the YesPaPa mobile app to pair:\n');
-            console.log(qrStr);
-
-            // Reopen DB to store config (was closed for daemon)
-            const db2 = openDatabase(DB_PATH);
-            setConfig(db2, 'supabase_url', supabaseUrl.trim());
-            setConfig(db2, 'supabase_anon_key', supabaseKey.trim());
-            setConfig(db2, 'supabase_host_id', hostRecord.id);
-            setConfig(db2, 'supabase_user_id', userId);
-            setConfig(db2, 'supabase_refresh_token', refreshToken);
-            db2.close();
-
-            console.log('  ✓ Remote server configured. Mobile app can now approve commands.');
-
-            // Restart daemon so it picks up the Supabase config
-            try {
-              process.kill(child.pid!, 'SIGTERM');
-            } catch { /* already exited */ }
-            await new Promise((r) => setTimeout(r, 1000));
-            const child2 = spawn(process.execPath, [daemonScript, password], {
-              detached: true,
-              stdio: 'ignore',
-            });
-            child2.unref();
-            console.log(`  ✓ Daemon restarted with remote server (PID: ${child2.pid})`);
-          } catch (err) {
-            console.log(`  ✗ Remote connection failed: ${err}`);
-            console.log('  Continuing in TOTP-only mode. You can configure remote later.\n');
-          }
-        }
-      }
 
       rl.close();
 
