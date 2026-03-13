@@ -148,6 +148,34 @@ export async function syncCommandResolution(
 }
 
 /**
+ * Fetch all grace periods for this host from Supabase and sync to local DB.
+ * Catches up on any missed Realtime events (e.g. revocations during disconnection).
+ */
+export async function fetchGracePeriods(
+  supabase: SupabaseClient,
+  hostId: string,
+  onGracePeriod?: (data: Record<string, unknown>) => void,
+  log?: (msg: string) => void,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from('grace_periods')
+    .select('*')
+    .eq('host_id', hostId);
+
+  if (error) {
+    log?.(`Failed to fetch grace periods: ${error.message}`);
+    return;
+  }
+
+  if (data) {
+    for (const row of data) {
+      onGracePeriod?.(row as Record<string, unknown>);
+    }
+    log?.(`Synced ${data.length} grace period(s) from remote`);
+  }
+}
+
+/**
  * Unsubscribe from all channels.
  */
 export function unsubscribeAll(supabase: SupabaseClient): void {

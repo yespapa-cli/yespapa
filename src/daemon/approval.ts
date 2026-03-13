@@ -145,7 +145,7 @@ export function createApprovalHandler(
     if (grace) {
       const remaining = formatRemaining(grace.expires_at);
       process.stdout.write(
-        `[YesPaPa] ✓ Auto-approved (grace: ${grace.scope}, expires in ${remaining})\n`,
+        `[YesPaPa] ✓ Auto-bypass (${grace.scope}, expires in ${remaining})\n`,
       );
       return { status: 'grace', source: 'grace_token' };
     }

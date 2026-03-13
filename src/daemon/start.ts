@@ -18,7 +18,7 @@ import { startDaemonServer, SOCKET_PATH } from './socket.js';
 import { startHeartbeat } from './heartbeat.js';
 import { appendFileSync, statSync, renameSync, existsSync as fsExists, unlinkSync } from 'node:fs';
 import { initializeSupabase } from '../supabase/index.js';
-import { pushCommand, syncCommandResolution, subscribeToApprovals } from '../supabase/sync.js';
+import { pushCommand, syncCommandResolution, subscribeToApprovals, fetchGracePeriods } from '../supabase/sync.js';
 import { createReconnectManager } from '../supabase/reconnect.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
@@ -145,22 +145,51 @@ async function main(): Promise<void> {
             // Check if expired (revocation sets expires_at = now)
             if (new Date(expiresAt) <= new Date()) {
               revokeGracePeriod(db, id);
-              log(`Remote grace period revoked: ${id}`);
+              log(`Remote auto-bypass revoked: ${id}`);
               return;
             }
 
             try {
               createGracePeriod(db, id, scope, expiresAt, hmac);
-              log(`Remote grace period synced: ${id} (${scope}, expires ${expiresAt})`);
+              log(`Remote auto-bypass synced: ${id} (${scope}, expires ${expiresAt})`);
             } catch {
-              // Already exists — may be an update (revocation)
-              log(`Remote grace period update: ${id}`);
+              // Already exists — this is an update, not an insert
+              // Could be a revocation that arrived with expires_at slightly in the future
+              revokeGracePeriod(db, id);
+              createGracePeriod(db, id, scope, expiresAt, hmac);
+              log(`Remote auto-bypass updated: ${id}`);
             }
           },
           (msg) => log(`[sync] ${msg}`),
         );
         reconnector.connect();
         log(`Remote server connected (host: ${supabaseHostId})`);
+
+        // Periodic grace period sync to catch missed Realtime events (e.g. revocations)
+        const GRACE_POLL_INTERVAL = 30_000; // 30s
+        const gracePollHandler = (data: Record<string, unknown>) => {
+          const id = data.id as string;
+          const scope = data.scope as string;
+          const expiresAt = data.expires_at as string;
+          const hmac = data.hmac_signature as string;
+          if (!id || !scope || !expiresAt || !hmac) return;
+
+          if (new Date(expiresAt) <= new Date()) {
+            revokeGracePeriod(db, id);
+            return;
+          }
+
+          try {
+            createGracePeriod(db, id, scope, expiresAt, hmac);
+          } catch {
+            // Already exists — update it
+            revokeGracePeriod(db, id);
+            createGracePeriod(db, id, scope, expiresAt, hmac);
+          }
+        };
+        setInterval(() => {
+          fetchGracePeriods(supabase, supabaseHostId, gracePollHandler).catch(() => {});
+        }, GRACE_POLL_INTERVAL);
 
         // Push pending commands to Supabase
         onCommandPending = (cmdId, cmd, justification) => {

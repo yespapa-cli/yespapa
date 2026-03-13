@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { subscribeToApprovals, subscribeToGracePeriods, type SyncConfig } from './sync.js';
+import { subscribeToApprovals, subscribeToGracePeriods, fetchGracePeriods, type SyncConfig } from './sync.js';
 import type { TotpValidator } from '../daemon/socket.js';
 
 export type ConnectionState = 'connected' | 'disconnected' | 'reconnecting';
@@ -52,6 +52,9 @@ export function createReconnectManager(
 
       const commandsChannel = subscribeToApprovals(syncConfig);
       const graceChannel = subscribeToGracePeriods(supabase, hostId, onGracePeriod);
+
+      // Catch up on any missed grace period changes (e.g. revocations during disconnect)
+      fetchGracePeriods(supabase, hostId, onGracePeriod, onLog).catch(() => {});
 
       setState('connected');
       retryCount = 0;

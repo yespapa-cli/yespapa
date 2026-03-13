@@ -9,6 +9,7 @@ vi.mock('../supabase/sync.js', () => ({
   subscribeToGracePeriods: vi.fn().mockReturnValue({
     on: vi.fn().mockReturnThis(),
   }),
+  fetchGracePeriods: vi.fn().mockResolvedValue(undefined),
 }));
 
 function createMockSupabase() {

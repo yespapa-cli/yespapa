@@ -70,7 +70,7 @@ export const execCommand = new Command('exec')
       }) as Record<string, string>;
 
       if (response.status === 'approved') {
-        // Grace period or allow-listed — execute immediately
+        // Auto-bypass or allow-listed — execute immediately
         if (response.message) {
           process.stderr.write(`[YesPaPa] ${response.message}\n`);
         }

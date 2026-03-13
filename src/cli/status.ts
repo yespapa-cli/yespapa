@@ -40,7 +40,7 @@ export const statusCommand = new Command('status')
       console.log(`  Remote:        offline (not configured)`);
     }
     console.log(`  Pending:       ${pending.length} command(s)`);
-    console.log(`  Grace periods: ${graceActive.length} active`);
+    console.log(`  Auto-bypass:   ${graceActive.length} active`);
 
     if (recent.length > 0) {
       console.log('\n  Recent commands:');

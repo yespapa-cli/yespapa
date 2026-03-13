@@ -222,7 +222,7 @@ function handleMessage(
       status: 'approved',
       id: commandId,
       command: cmdStr,
-      message: `Auto-approved (grace: ${graceMatch.scope}, expires in ${graceMatch.remaining})`,
+      message: `Auto-bypass (${graceMatch.scope}, expires in ${graceMatch.remaining})`,
     });
     return;
   }

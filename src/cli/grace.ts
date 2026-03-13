@@ -32,7 +32,7 @@ function prompt(rl: ReturnType<typeof createInterface>, question: string): Promi
 }
 
 const activateCommand = new Command('activate')
-  .description('Activate a grace period (auto-approve commands without TOTP)')
+  .description('Activate auto-bypass (skip TOTP for commands matching a scope)')
   .requiredOption('--scope <scope>', 'Scope: "all" or a bundle name (destructive, git-rewrite, etc.)')
   .requiredOption('--duration <duration>', 'Duration: 1h, 24h, or 7d')
   .action(async (options) => {
@@ -92,11 +92,11 @@ const activateCommand = new Command('activate')
             hmac_signature: token.hmac_signature,
           });
         } catch {
-          console.log('  (Failed to sync to remote — grace period active locally only)');
+          console.log('  (Failed to sync to remote — auto-bypass active locally only)');
         }
       }
 
-      console.log(`\n  ✓ Grace period activated`);
+      console.log(`\n  ✓ Auto-bypass activated`);
       console.log(`    Scope:   ${token.scope}`);
       console.log(`    Expires: ${getGraceRemaining(token)}`);
       console.log(`    ID:      ${token.id}\n`);
@@ -107,18 +107,18 @@ const activateCommand = new Command('activate')
   });
 
 const listCommand = new Command('list')
-  .description('List active grace periods')
+  .description('List active auto-bypasses')
   .action(() => {
     const db = ensureInitialized();
     const active = getActiveGracePeriods(db);
 
     if (active.length === 0) {
-      console.log('No active grace periods.');
+      console.log('No active auto-bypasses.');
       db.close();
       return;
     }
 
-    console.log('\n  Active Grace Periods:\n');
+    console.log('\n  Active Auto-Bypasses:\n');
     console.log('  ID                  | Scope        | Remaining   ');
     console.log('  --------------------|--------------|-------------');
     for (const gp of active) {
@@ -133,8 +133,8 @@ const listCommand = new Command('list')
   });
 
 const revokeCommand = new Command('revoke')
-  .description('Revoke a grace period')
-  .option('--id <id>', 'Grace period ID to revoke (revokes all if omitted)')
+  .description('Revoke an auto-bypass')
+  .option('--id <id>', 'Auto-bypass ID to revoke (revokes all if omitted)')
   .action(async (options) => {
     const db = ensureInitialized();
     const rl = createInterface({ input: process.stdin, output: process.stdout });
@@ -142,7 +142,7 @@ const revokeCommand = new Command('revoke')
     try {
       const active = getActiveGracePeriods(db);
       if (active.length === 0) {
-        console.log('No active grace periods to revoke.');
+        console.log('No active auto-bypasses to revoke.');
         return;
       }
 
@@ -177,7 +177,7 @@ const revokeCommand = new Command('revoke')
         : active;
 
       if (toRevoke.length === 0) {
-        console.log(`No grace period found with ID: ${options.id}`);
+        console.log(`No auto-bypass found with ID: ${options.id}`);
         return;
       }
 
@@ -196,15 +196,15 @@ const revokeCommand = new Command('revoke')
         }
       }
 
-      console.log(`\n  ✓ Revoked ${toRevoke.length} grace period(s). TOTP required again.\n`);
+      console.log(`\n  ✓ Revoked ${toRevoke.length} auto-bypass(es). TOTP required again.\n`);
     } finally {
       rl.close();
       db.close();
     }
   });
 
-export const graceCommand = new Command('grace')
-  .description('Manage grace periods (temporarily bypass TOTP for approved scopes)')
+export const graceCommand = new Command('bypass')
+  .description('Manage auto-bypass (temporarily skip TOTP for approved scopes)')
   .addCommand(activateCommand)
   .addCommand(listCommand)
   .addCommand(revokeCommand);

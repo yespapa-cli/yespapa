@@ -95,7 +95,7 @@ export const rotateCommand = new Command('rotate-seed')
 
       console.log('\n  Seed rotated successfully!');
       console.log(`  - Old TOTP codes will no longer work`);
-      console.log(`  - ${active.length} grace period(s) invalidated`);
+      console.log(`  - ${active.length} auto-bypass(es) invalidated`);
       console.log(`  - Restart the daemon for changes to take effect\n`);
       console.log('  Run: yespapa restart\n');
     } finally {
