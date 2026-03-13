@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { pushCommand, syncCommandResolution } from '../supabase/sync.js';
+import { pushCommand, syncCommandResolution, getChannelCount, subscribeToHostChannel } from '../supabase/sync.js';
 
 describe('supabase sync module', () => {
   const mockInsert = vi.fn().mockResolvedValue({ error: null });
@@ -74,6 +74,39 @@ describe('supabase sync module', () => {
           }),
         });
       });
+    });
+  });
+
+  describe('getChannelCount', () => {
+    it('returns channel count from supabase client', () => {
+      const mockClient = {
+        getChannels: vi.fn().mockReturnValue([{ name: 'ch1' }, { name: 'ch2' }]),
+      } as unknown as import('@supabase/supabase-js').SupabaseClient;
+      expect(getChannelCount(mockClient)).toBe(2);
+    });
+  });
+
+  describe('subscribeToHostChannel', () => {
+    it('creates a single consolidated channel for both tables', () => {
+      const onFn = vi.fn().mockReturnThis();
+      const subscribeFn = vi.fn().mockReturnThis();
+      const channelFn = vi.fn().mockReturnValue({ on: onFn, subscribe: subscribeFn });
+      const client = {
+        channel: channelFn,
+        removeChannel: vi.fn(),
+        removeAllChannels: vi.fn(),
+      } as unknown as import('@supabase/supabase-js').SupabaseClient;
+
+      subscribeToHostChannel(
+        { supabase: client, hostId: 'host-1', validateTotp: () => true },
+        () => {},
+      );
+
+      // Should create ONE channel
+      expect(channelFn).toHaveBeenCalledTimes(1);
+      expect(channelFn).toHaveBeenCalledWith('host:host-1');
+      // Should subscribe to both commands and grace_periods via .on() calls
+      expect(onFn).toHaveBeenCalledTimes(2);
     });
   });
 

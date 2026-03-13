@@ -3,13 +3,12 @@ import { createReconnectManager, type ConnectionState } from '../supabase/reconn
 
 // Mock the sync module
 vi.mock('../supabase/sync.js', () => ({
-  subscribeToApprovals: vi.fn().mockReturnValue({
+  subscribeToHostChannel: vi.fn().mockReturnValue({
     on: vi.fn().mockReturnThis(),
-  }),
-  subscribeToGracePeriods: vi.fn().mockReturnValue({
-    on: vi.fn().mockReturnThis(),
+    subscribe: vi.fn().mockReturnThis(),
   }),
   fetchGracePeriods: vi.fn().mockResolvedValue(undefined),
+  getChannelCount: vi.fn().mockReturnValue(1),
 }));
 
 function createMockSupabase() {

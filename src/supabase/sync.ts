@@ -12,9 +12,50 @@ export interface SyncConfig {
 let channel: RealtimeChannel | null = null;
 let syncLog: ((msg: string) => void) | undefined;
 
+// ── Rate limiter ────────────────────────────────────────────
+const RATE_LIMIT_MAX = 10;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const pushTimestamps: number[] = [];
+const pushQueue: Array<() => Promise<void>> = [];
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
+
+function isRateLimited(): boolean {
+  const now = Date.now();
+  // Remove timestamps outside the window
+  while (pushTimestamps.length > 0 && pushTimestamps[0] < now - RATE_LIMIT_WINDOW_MS) {
+    pushTimestamps.shift();
+  }
+  return pushTimestamps.length >= RATE_LIMIT_MAX;
+}
+
+function drainQueue(): void {
+  if (drainTimer) return;
+  if (pushQueue.length === 0) return;
+  if (isRateLimited()) {
+    // Try again after the oldest entry expires
+    const waitMs = pushTimestamps[0] + RATE_LIMIT_WINDOW_MS - Date.now() + 100;
+    drainTimer = setTimeout(() => {
+      drainTimer = null;
+      drainQueue();
+    }, Math.max(waitMs, 500));
+    return;
+  }
+  const next = pushQueue.shift();
+  if (next) {
+    pushTimestamps.push(Date.now());
+    next().catch(() => {}).finally(() => drainQueue());
+  }
+}
+
+/** Number of active Realtime channels. */
+export function getChannelCount(supabase: SupabaseClient): number {
+  return supabase.getChannels().length;
+}
+
 /**
  * Push a pending command to the Supabase `commands` table,
  * then invoke the push_notification Edge Function directly.
+ * Rate-limited to max 10 commands/minute per host — excess is queued.
  */
 export async function pushCommand(
   supabase: SupabaseClient,
@@ -24,25 +65,37 @@ export async function pushCommand(
   justification?: string,
   timeoutSeconds?: number,
 ): Promise<void> {
-  const record = {
-    id: commandId,
-    host_id: hostId,
-    command_display: commandDisplay,
-    justification: justification ?? null,
-    status: 'pending',
-    timeout_seconds: timeoutSeconds ?? 0,
+  const doPush = async () => {
+    const record = {
+      id: commandId,
+      host_id: hostId,
+      command_display: commandDisplay,
+      justification: justification ?? null,
+      status: 'pending',
+      timeout_seconds: timeoutSeconds ?? 0,
+    };
+
+    const { error } = await supabase.from('commands').insert(record);
+
+    if (error) {
+      throw new Error(`Supabase insert failed: ${error.message} (code: ${error.code})`);
+    }
+
+    // Fire push notification via Edge Function (non-blocking, best-effort)
+    sendPushNotification(supabase, record).catch((err) => {
+      syncLog?.(`Push notification error: ${err}`);
+    });
   };
 
-  const { error } = await supabase.from('commands').insert(record);
-
-  if (error) {
-    throw new Error(`Supabase insert failed: ${error.message} (code: ${error.code})`);
+  if (isRateLimited()) {
+    syncLog?.(`Rate limited: queuing command ${commandId} (${pushQueue.length + 1} in queue)`);
+    pushQueue.push(doPush);
+    drainQueue();
+    return;
   }
 
-  // Fire push notification via Edge Function (non-blocking, best-effort)
-  sendPushNotification(supabase, record).catch((err) => {
-    syncLog?.(`Push notification error: ${err}`);
-  });
+  pushTimestamps.push(Date.now());
+  await doPush();
 }
 
 /**
@@ -150,6 +203,74 @@ export function subscribeToGracePeriods(
       },
     )
     .subscribe();
+}
+
+/**
+ * Subscribe to BOTH commands and grace_periods on a single consolidated channel.
+ * Uses one Realtime connection per host instead of two, reducing connection usage.
+ */
+export function subscribeToHostChannel(
+  config: SyncConfig,
+  onGracePeriod?: (data: Record<string, unknown>) => void,
+): RealtimeChannel {
+  const { supabase, hostId, validateTotp, onCommandResolved, log } = config;
+  syncLog = log;
+
+  // Unsubscribe from previous channel if any
+  if (channel) {
+    supabase.removeChannel(channel);
+    channel = null;
+  }
+
+  channel = supabase
+    .channel(`host:${hostId}`)
+    .on(
+      'postgres_changes',
+      {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'commands',
+        filter: `host_id=eq.${hostId}`,
+      },
+      (payload) => {
+        const row = payload.new as Record<string, unknown>;
+        const commandId = row.id as string;
+        const status = row.status as string;
+        const totpCode = row.totp_code as string | undefined;
+        const message = row.message as string | undefined;
+
+        syncLog?.(`Realtime UPDATE received: ${commandId} → ${status}`);
+
+        if (status === 'approved') {
+          if (!totpCode || !validateTotp(totpCode)) {
+            syncLog?.(`Ignoring remote approval for ${commandId}: invalid TOTP`);
+            return;
+          }
+          setRemoteResolution(commandId, { status: 'approved', message, source: 'app_approve' });
+          onCommandResolved?.(commandId, 'approved', message);
+        } else if (status === 'denied') {
+          setRemoteResolution(commandId, { status: 'denied', message, source: 'app_approve' });
+          onCommandResolved?.(commandId, 'denied', message);
+        }
+      },
+    )
+    .on(
+      'postgres_changes',
+      {
+        event: '*',
+        schema: 'public',
+        table: 'grace_periods',
+        filter: `host_id=eq.${hostId}`,
+      },
+      (payload) => {
+        onGracePeriod?.(payload.new as Record<string, unknown>);
+      },
+    )
+    .subscribe((status, err) => {
+      syncLog?.(`Realtime subscription status: ${status}${err ? ` (error: ${err.message})` : ''}`);
+    });
+
+  return channel;
 }
 
 /**

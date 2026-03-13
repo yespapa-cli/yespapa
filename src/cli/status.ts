@@ -34,8 +34,10 @@ export const statusCommand = new Command('status')
     console.log(`  Interceptor:   ${interceptorInstalled ? '✓ installed' : '✗ not installed'}`);
     const supabaseUrl = getConfig(db, 'supabase_url');
     const supabaseHostId = getConfig(db, 'supabase_host_id');
+    const channelCount = getConfig(db, 'realtime_channels');
     if (supabaseUrl && supabaseHostId) {
-      console.log(`  Remote:        ✓ configured (host: ${supabaseHostId})`);
+      const channelInfo = channelCount ? `, ${channelCount} channel(s)` : '';
+      console.log(`  Remote:        ✓ configured (host: ${supabaseHostId}${channelInfo})`);
     } else {
       console.log(`  Remote:        offline (not configured)`);
     }
