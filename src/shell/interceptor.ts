@@ -121,21 +121,19 @@ _yp_intercept_inner() {
   local attempts=0
   local max_polls=180  # 180 polls × 1s = 3 min max wait
   local poll_count=0
+  local poll_resp poll_status poll_msg totp_code totp_response yp_totp_status
   printf "  Enter TOTP code or master key: " >&9
   while [ $poll_count -lt $max_polls ]; do
     # Poll for remote resolution
-    local poll_resp poll_status
     poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}")
     poll_status=$(yespapa_json_field "$poll_resp" "status")
     if [ "$poll_status" = "approved" ]; then
-      local poll_msg
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&9
       echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 0
     elif [ "$poll_status" = "denied" ]; then
-      local poll_msg
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&9
@@ -144,11 +142,10 @@ _yp_intercept_inner() {
     fi
 
     # Try reading TOTP input with 1-second timeout
-    local totp_code=""
+    totp_code=""
     read -r -t 1 totp_code || true
     if [ -n "$totp_code" ]; then
       attempts=$((attempts + 1))
-      local totp_response yp_totp_status
       totp_response=$(yespapa_send "{\\"totp\\":\\"$totp_code\\",\\"id\\":\\"$cmd_id\\"}")
       yp_totp_status=$(yespapa_json_field "$totp_response" "status")
       if [ "$yp_totp_status" = "approved" ]; then
