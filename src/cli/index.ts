@@ -10,6 +10,7 @@ import { execCommand, approveCommand } from './exec.js';
 import { rotateCommand } from './rotate.js';
 import { startCommand, restartCommand } from './start.js';
 import { configCommand } from './config.js';
+import { testCommand } from './test.js';
 import { VERSION } from '../index.js';
 
 const program = new Command();
@@ -29,6 +30,7 @@ program.addCommand(execCommand);
 program.addCommand(approveCommand);
 program.addCommand(rotateCommand);
 program.addCommand(configCommand);
+program.addCommand(testCommand);
 program.addCommand(uninstallCommand);
 
 program.parse();

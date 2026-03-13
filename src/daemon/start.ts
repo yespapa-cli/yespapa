@@ -106,6 +106,26 @@ async function main(): Promise<void> {
     if (supabaseUrl && supabaseAnonKey && supabaseHostId) {
       try {
         const supabase = initializeSupabase(supabaseUrl, supabaseAnonKey);
+
+        // Restore session — required for RLS policies to match user_id
+        const refreshToken = getConfig(db, 'supabase_refresh_token');
+        if (refreshToken) {
+          const { restoreSession } = await import('../supabase/index.js');
+          try {
+            await restoreSession(refreshToken);
+            log('Remote session restored successfully');
+          } catch (authErr) {
+            // Refresh token expired — try fresh anonymous auth as fallback
+            log(`Session restore failed (${authErr}), trying fresh auth...`);
+            const { authenticateAnonymous } = await import('../supabase/index.js');
+            const { refreshToken: newToken } = await authenticateAnonymous();
+            setConfig(db, 'supabase_refresh_token', newToken);
+            log('Remote authenticated with new session (WARNING: user_id may have changed)');
+          }
+        } else {
+          log('No refresh token stored — remote commands may fail due to RLS');
+        }
+
         const reconnector = createReconnectManager(
           supabase,
           supabaseHostId,
@@ -137,6 +157,7 @@ async function main(): Promise<void> {
               log(`Remote grace period update: ${id}`);
             }
           },
+          (msg) => log(`[sync] ${msg}`),
         );
         reconnector.connect();
         log(`Remote server connected (host: ${supabaseHostId})`);

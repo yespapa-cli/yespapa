@@ -6,9 +6,11 @@ export interface SyncConfig {
   hostId: string;
   validateTotp: TotpValidator;
   onCommandResolved?: (commandId: string, status: string, message?: string) => void;
+  log?: (msg: string) => void;
 }
 
 let channel: RealtimeChannel | null = null;
+let syncLog: ((msg: string) => void) | undefined;
 
 /**
  * Push a pending command to the Supabase `commands` table.
@@ -31,7 +33,7 @@ export async function pushCommand(
   });
 
   if (error) {
-    console.error(`[YesPaPa] Failed to push command to Supabase: ${error.message}`);
+    throw new Error(`Supabase insert failed: ${error.message} (code: ${error.code})`);
   }
 }
 
@@ -41,7 +43,8 @@ export async function pushCommand(
  * and set the remote resolution so the poll-check handler can pick it up.
  */
 export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
-  const { supabase, hostId, validateTotp, onCommandResolved } = config;
+  const { supabase, hostId, validateTotp, onCommandResolved, log } = config;
+  syncLog = log;
 
   // Unsubscribe from previous channel if any
   if (channel) {
@@ -66,10 +69,12 @@ export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
         const totpCode = row.totp_code as string | undefined;
         const message = row.message as string | undefined;
 
+        syncLog?.(`Realtime UPDATE received: ${commandId} → ${status}`);
+
         if (status === 'approved') {
           // Validate TOTP — the app must have sent a valid code
           if (!totpCode || !validateTotp(totpCode)) {
-            console.log(`[YesPaPa] Ignoring invalid remote approval for ${commandId} (bad TOTP)`);
+            syncLog?.(`Ignoring remote approval for ${commandId}: invalid TOTP (code=${totpCode ? 'present' : 'missing'})`);
             return;
           }
           setRemoteResolution(commandId, {
@@ -88,7 +93,9 @@ export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
         }
       },
     )
-    .subscribe();
+    .subscribe((status, err) => {
+      syncLog?.(`Realtime subscription status: ${status}${err ? ` (error: ${err.message})` : ''}`);
+    });
 
   return channel;
 }

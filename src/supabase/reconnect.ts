@@ -24,6 +24,7 @@ export function createReconnectManager(
   onStateChange?: (state: ConnectionState) => void,
   onCommandResolved?: (commandId: string, status: string, message?: string) => void,
   onGracePeriod?: (data: Record<string, unknown>) => void,
+  onLog?: (msg: string) => void,
 ): ReconnectManager {
   let state: ConnectionState = 'disconnected';
   let retryCount = 0;
@@ -46,6 +47,7 @@ export function createReconnectManager(
         hostId,
         validateTotp,
         onCommandResolved,
+        log: onLog,
       };
 
       const commandsChannel = subscribeToApprovals(syncConfig);

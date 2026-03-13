@@ -1,6 +1,13 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { hostname, userInfo, platform } from 'node:os';
+import WebSocket from 'ws';
+
+// Polyfill WebSocket for Node.js — required by Supabase Realtime
+if (typeof globalThis.WebSocket === 'undefined') {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (globalThis as any).WebSocket = WebSocket;
+}
 
 export interface SupabaseConfig {
   url: string;
@@ -55,7 +62,7 @@ export function resetSupabaseClient(): void {
  * Authenticate anonymously with Supabase.
  * Returns the anonymous user session.
  */
-export async function authenticateAnonymous(): Promise<{ userId: string; accessToken: string }> {
+export async function authenticateAnonymous(): Promise<{ userId: string; accessToken: string; refreshToken: string }> {
   const supabase = getSupabaseClient();
   const { data, error } = await supabase.auth.signInAnonymously();
   if (error) {
@@ -63,6 +70,26 @@ export async function authenticateAnonymous(): Promise<{ userId: string; accessT
   }
   if (!data.user || !data.session) {
     throw new Error('Anonymous auth returned no user or session');
+  }
+  return {
+    userId: data.user.id,
+    accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
+  };
+}
+
+/**
+ * Restore a session using a stored refresh token.
+ * This allows the daemon to authenticate as the same user across restarts.
+ */
+export async function restoreSession(refreshToken: string): Promise<{ userId: string; accessToken: string }> {
+  const supabase = getSupabaseClient();
+  const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+  if (error) {
+    throw new Error(`Session restore failed: ${error.message}`);
+  }
+  if (!data.user || !data.session) {
+    throw new Error('Session restore returned no user or session');
   }
   return {
     userId: data.user.id,

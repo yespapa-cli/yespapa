@@ -7,6 +7,7 @@ export interface PairingData {
   supabase_anon_key: string;
   host_id: string;
   pairing_token: string;
+  refresh_token?: string;
 }
 
 /**
@@ -24,12 +25,14 @@ export function createPairingPayload(
   supabaseAnonKey: string,
   hostId: string,
   pairingToken: string,
+  refreshToken?: string,
 ): PairingData {
   return {
     supabase_url: supabaseUrl,
     supabase_anon_key: supabaseAnonKey,
     host_id: hostId,
     pairing_token: pairingToken,
+    refresh_token: refreshToken,
   };
 }
 

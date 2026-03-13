@@ -174,7 +174,7 @@ export const initCommand = new Command('init')
             const supabase = initializeSupabase(supabaseUrl.trim(), supabaseKey.trim());
 
             // Authenticate anonymously
-            const { userId } = await authenticateAnonymous();
+            const { userId, refreshToken } = await authenticateAnonymous();
             console.log('  ✓ Authenticated with remote server');
 
             // Register host
@@ -184,7 +184,7 @@ export const initCommand = new Command('init')
             // Generate pairing token and QR
             const pairingToken = generatePairingToken();
             await storePairingToken(supabase, hostRecord.id, pairingToken);
-            const payload = createPairingPayload(supabaseUrl.trim(), supabaseKey.trim(), hostRecord.id, pairingToken);
+            const payload = createPairingPayload(supabaseUrl.trim(), supabaseKey.trim(), hostRecord.id, pairingToken, refreshToken);
             const qrStr = await generatePairingQR(payload);
             console.log('\n  Scan this QR code with the YesPaPa mobile app to pair:\n');
             console.log(qrStr);
@@ -195,9 +195,22 @@ export const initCommand = new Command('init')
             setConfig(db2, 'supabase_anon_key', supabaseKey.trim());
             setConfig(db2, 'supabase_host_id', hostRecord.id);
             setConfig(db2, 'supabase_user_id', userId);
+            setConfig(db2, 'supabase_refresh_token', refreshToken);
             db2.close();
 
             console.log('  ✓ Remote server configured. Mobile app can now approve commands.');
+
+            // Restart daemon so it picks up the Supabase config
+            try {
+              process.kill(child.pid!, 'SIGTERM');
+            } catch { /* already exited */ }
+            await new Promise((r) => setTimeout(r, 1000));
+            const child2 = spawn(process.execPath, [daemonScript, password], {
+              detached: true,
+              stdio: 'ignore',
+            });
+            child2.unref();
+            console.log(`  ✓ Daemon restarted with remote server (PID: ${child2.pid})`);
           } catch (err) {
             console.log(`  ✗ Remote connection failed: ${err}`);
             console.log('  Continuing in TOTP-only mode. You can configure remote later.\n');
