@@ -66,9 +66,9 @@ _yp_intercept_inner() {
   done
   local json="{\\"command\\":\\"$cmd_name\\",\\"args\\":[$args_json],\\"fullCommand\\":\\"$full_cmd\\"}"
 
-  # Phase 1: Send command to daemon
+  # Phase 1: Send command to daemon (suppress xtrace on all assignments)
   local response
-  response=$(yespapa_send "$json")
+  { response=$(yespapa_send "$json"); } 2>/dev/null
   if [ -z "$response" ]; then
     echo "[YesPaPa] Daemon not running. Command blocked for safety." >&2
     echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&2
@@ -76,8 +76,8 @@ _yp_intercept_inner() {
   fi
 
   local yp_status yp_message
-  yp_status=$(yespapa_json_field "$response" "status")
-  yp_message=$(yespapa_json_field "$response" "message")
+  { yp_status=$(yespapa_json_field "$response" "status"); } 2>/dev/null
+  { yp_message=$(yespapa_json_field "$response" "message"); } 2>/dev/null
 
   if [ "$yp_status" = "approved" ]; then
     if [ -n "$yp_message" ]; then
@@ -94,8 +94,8 @@ _yp_intercept_inner() {
 
   # Phase 2: TOTP prompt with agent-friendly output
   local cmd_id rule
-  cmd_id=$(yespapa_json_field "$response" "id")
-  rule=$(yespapa_json_field "$response" "rule")
+  { cmd_id=$(yespapa_json_field "$response" "id"); } 2>/dev/null
+  { rule=$(yespapa_json_field "$response" "rule"); } 2>/dev/null
   echo "" >&2
   echo "  ┌─────────────────────────────────────────────────┐" >&2
   echo "  │  YesPaPa — Command Requires Human Approval      │" >&2
@@ -118,20 +118,20 @@ _yp_intercept_inner() {
   local poll_count=0
   printf "  Enter TOTP code or master key: " >&2
   while [ $poll_count -lt $max_polls ]; do
-    # Poll for remote resolution (silent — no output on pending)
+    # Poll for remote resolution (silent — { ... } 2>/dev/null suppresses xtrace of assignments)
     local poll_resp poll_status
-    poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}" 2>/dev/null)
-    poll_status=$(yespapa_json_field "$poll_resp" "status" 2>/dev/null)
+    { poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}"); } 2>/dev/null
+    { poll_status=$(yespapa_json_field "$poll_resp" "status"); } 2>/dev/null
     if [ "$poll_status" = "approved" ]; then
       local poll_msg
-      poll_msg=$(yespapa_json_field "$poll_resp" "message")
+      { poll_msg=$(yespapa_json_field "$poll_resp" "message"); } 2>/dev/null
       echo "" >&2
       echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&2
       echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&2
       return 0
     elif [ "$poll_status" = "denied" ]; then
       local poll_msg
-      poll_msg=$(yespapa_json_field "$poll_resp" "message")
+      { poll_msg=$(yespapa_json_field "$poll_resp" "message"); } 2>/dev/null
       echo "" >&2
       echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&2
       echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&2
@@ -144,9 +144,9 @@ _yp_intercept_inner() {
     if [ -n "$totp_code" ]; then
       attempts=$((attempts + 1))
       local totp_response
-      totp_response=$(yespapa_send "{\\"totp\\":\\"$totp_code\\",\\"id\\":\\"$cmd_id\\"}")
+      { totp_response=$(yespapa_send "{\\"totp\\":\\"$totp_code\\",\\"id\\":\\"$cmd_id\\"}"); } 2>/dev/null
       local yp_totp_status
-      yp_totp_status=$(yespapa_json_field "$totp_response" "status")
+      { yp_totp_status=$(yespapa_json_field "$totp_response" "status"); } 2>/dev/null
       if [ "$yp_totp_status" = "approved" ]; then
         echo "" >&2
         echo "  [YesPaPa] Approved" >&2

@@ -20,6 +20,7 @@ import { appendFileSync, statSync, renameSync, existsSync as fsExists, unlinkSyn
 import { initializeSupabase } from '../supabase/index.js';
 import { pushCommand, syncCommandResolution, subscribeToApprovals, fetchGracePeriods } from '../supabase/sync.js';
 import { createReconnectManager } from '../supabase/reconnect.js';
+import { injectInterceptor } from '../shell/interceptor.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -64,6 +65,14 @@ async function main(): Promise<void> {
 
     // Update PID
     setConfig(db, 'daemon_pid', process.pid.toString());
+
+    // Regenerate interceptor script (ensures on-disk version is current)
+    try {
+      injectInterceptor();
+      log('Interceptor script regenerated');
+    } catch (err) {
+      log(`WARNING: Failed to regenerate interceptor: ${err}`);
+    }
 
     // Clock skew warning: TOTP depends on accurate time
     const skewCheck = Math.abs(Date.now() % 30000);
