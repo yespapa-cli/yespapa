@@ -6,11 +6,15 @@ describe('supabase sync module', () => {
   const mockUpdate = vi.fn().mockReturnValue({
     eq: vi.fn().mockResolvedValue({ error: null }),
   });
+  const mockFunctionsInvoke = vi.fn().mockResolvedValue({ data: { status: 'ok' }, error: null });
   const mockSupabase = {
     from: vi.fn().mockImplementation(() => ({
       insert: mockInsert,
       update: mockUpdate,
     })),
+    functions: {
+      invoke: mockFunctionsInvoke,
+    },
     channel: vi.fn().mockReturnValue({
       on: vi.fn().mockReturnThis(),
       subscribe: vi.fn().mockReturnThis(),
@@ -51,12 +55,25 @@ describe('supabase sync module', () => {
       );
     });
 
-    it('logs error on insert failure', async () => {
+    it('throws on insert failure', async () => {
       mockInsert.mockResolvedValueOnce({ error: { message: 'Insert failed' } });
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await pushCommand(mockSupabase, 'host-123', 'cmd_fail', 'rm -rf /');
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Insert failed'));
-      consoleSpy.mockRestore();
+      await expect(
+        pushCommand(mockSupabase, 'host-123', 'cmd_fail', 'rm -rf /'),
+      ).rejects.toThrow('Insert failed');
+    });
+
+    it('calls push_notification edge function after insert', async () => {
+      await pushCommand(mockSupabase, 'host-123', 'cmd_push', 'rm -rf ./dist');
+      // Wait for the async push notification call
+      await vi.waitFor(() => {
+        expect(mockFunctionsInvoke).toHaveBeenCalledWith('push_notification', {
+          body: expect.objectContaining({
+            type: 'INSERT',
+            table: 'commands',
+            record: expect.objectContaining({ id: 'cmd_push' }),
+          }),
+        });
+      });
     });
   });
 

@@ -13,7 +13,8 @@ let channel: RealtimeChannel | null = null;
 let syncLog: ((msg: string) => void) | undefined;
 
 /**
- * Push a pending command to the Supabase `commands` table.
+ * Push a pending command to the Supabase `commands` table,
+ * then invoke the push_notification Edge Function directly.
  */
 export async function pushCommand(
   supabase: SupabaseClient,
@@ -23,17 +24,43 @@ export async function pushCommand(
   justification?: string,
   timeoutSeconds?: number,
 ): Promise<void> {
-  const { error } = await supabase.from('commands').insert({
+  const record = {
     id: commandId,
     host_id: hostId,
     command_display: commandDisplay,
     justification: justification ?? null,
     status: 'pending',
     timeout_seconds: timeoutSeconds ?? 0,
-  });
+  };
+
+  const { error } = await supabase.from('commands').insert(record);
 
   if (error) {
     throw new Error(`Supabase insert failed: ${error.message} (code: ${error.code})`);
+  }
+
+  // Fire push notification via Edge Function (non-blocking, best-effort)
+  sendPushNotification(supabase, record).catch((err) => {
+    syncLog?.(`Push notification error: ${err}`);
+  });
+}
+
+/**
+ * Call the push_notification Edge Function directly.
+ * This avoids needing a database webhook trigger.
+ */
+async function sendPushNotification(
+  supabase: SupabaseClient,
+  record: { id: string; host_id: string; command_display: string; justification: string | null },
+): Promise<void> {
+  const { data, error } = await supabase.functions.invoke('push_notification', {
+    body: { type: 'INSERT', table: 'commands', record },
+  });
+
+  if (error) {
+    syncLog?.(`Push notification failed: ${error.message}`);
+  } else {
+    syncLog?.(`Push notification sent: ${JSON.stringify(data)}`);
   }
 }
 
