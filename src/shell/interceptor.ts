@@ -13,7 +13,7 @@ const SOURCE_LINE = '[ -f ~/.yespapa/interceptor.sh ] && source ~/.yespapa/inter
  */
 export const INTERCEPTOR_FUNCTIONS = [
   'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill',
-  'yespapa_intercept', 'yespapa_send', 'yespapa_json_field',
+  'yespapa_intercept', '_yp_intercept_inner', 'yespapa_send', 'yespapa_json_field',
 ];
 
 /**
@@ -44,8 +44,17 @@ yespapa_json_field() {
   fi
 }
 
-# Core intercept function — two-phase protocol with daemon
+# Core intercept function — wraps inner to suppress xtrace noise
 yespapa_intercept() {
+  local _yp_save_xtrace=""
+  case "$-" in *x*) _yp_save_xtrace=1; set +x;; esac
+  _yp_intercept_inner "$@"
+  local _yp_rc=$?
+  [ "$_yp_save_xtrace" = "1" ] && set -x
+  return $_yp_rc
+}
+
+_yp_intercept_inner() {
   local full_cmd="$*"
   local cmd_name="$1"
   shift
@@ -107,12 +116,12 @@ yespapa_intercept() {
   local attempts=0
   local max_polls=180  # 180 polls × 1s = 3 min max wait
   local poll_count=0
-  printf "  Enter TOTP code or password: " >&2
+  printf "  Enter TOTP code or master key: " >&2
   while [ $poll_count -lt $max_polls ]; do
-    # Poll for remote resolution
+    # Poll for remote resolution (silent — no output on pending)
     local poll_resp poll_status
-    poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}")
-    poll_status=$(yespapa_json_field "$poll_resp" "status")
+    poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}" 2>/dev/null)
+    poll_status=$(yespapa_json_field "$poll_resp" "status" 2>/dev/null)
     if [ "$poll_status" = "approved" ]; then
       local poll_msg
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
@@ -150,7 +159,7 @@ yespapa_intercept() {
         echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&2
         return 1
       fi
-      echo "  Invalid code or password (attempt $attempts/3). Try again: " >&2
+      echo "  Invalid code or master key (attempt $attempts/3). Try again: " >&2
     fi
 
     poll_count=$((poll_count + 1))
