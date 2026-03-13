@@ -197,11 +197,10 @@ async function main(): Promise<void> {
       log('No remote server configured. Running in TOTP-only mode.');
     }
 
-    // Password bypass validator (if configured)
+    // Password bypass validator — always enabled when a password hash exists
     let passwordValidator: PasswordValidator | undefined;
-    const allowPasswordBypass = getConfig(db, 'allow_password_bypass');
     const passwordHash = getConfig(db, 'removal_password_hash');
-    if (allowPasswordBypass === 'true' && passwordHash) {
+    if (passwordHash) {
       passwordValidator = (input: string) => verifyPassword(input, passwordHash);
     }
 

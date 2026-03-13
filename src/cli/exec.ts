@@ -1,16 +1,9 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline';
 import { createConnection } from 'node:net';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { SOCKET_PATH } from '../daemon/socket.js';
-import { openDatabase, getConfig } from '../db/index.js';
-import { decryptSeed } from '../crypto/index.js';
-import { validateCode } from '../totp/index.js';
-
-const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
 
 function sendToDaemon(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -148,7 +141,7 @@ export const execCommand = new Command('exec')
 
       // Also accept TOTP from stdin
       let attempts = 0;
-      process.stderr.write(`  Enter TOTP code (attempt 1/3): `);
+      process.stderr.write(`  Enter TOTP code or password (attempt 1/3): `);
 
       for await (const line of rl) {
         if (resolved) break;
@@ -184,7 +177,7 @@ export const execCommand = new Command('exec')
           process.stderr.write(JSON.stringify(json) + '\n');
           process.exit(1);
         }
-        process.stderr.write(`  Enter TOTP code (attempt ${attempts + 1}/3): `);
+        process.stderr.write(`  Enter TOTP code or password (attempt ${attempts + 1}/3): `);
       }
 
       if (!resolved) {
@@ -201,7 +194,7 @@ export const execCommand = new Command('exec')
 // ── yespapa approve ────────────────────────────
 
 export const approveCommand = new Command('approve')
-  .description('Approve a pending command by ID (requires TOTP)')
+  .description('Approve a pending command by ID (requires TOTP or removal password)')
   .argument('<command_id>', 'Command ID to approve (e.g., cmd_a1b2c3d4)')
   .action(async (commandId: string) => {
     if (!existsSync(SOCKET_PATH)) {
@@ -209,25 +202,12 @@ export const approveCommand = new Command('approve')
       process.exit(1);
     }
 
-    const db = openDatabase(DB_PATH);
-    const encryptedSeed = getConfig(db, 'totp_seed');
-    if (!encryptedSeed) {
-      console.log('No TOTP seed found.');
-      process.exit(1);
-    }
-
     const rl = createInterface({ input: process.stdin, output: process.stdout });
     try {
-      const password = await prompt(rl, 'Enter removal password: ');
-      const seed = await decryptSeed(encryptedSeed, password);
-      const code = await prompt(rl, 'Enter TOTP code: ');
+      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
 
-      if (!validateCode(seed, code.trim())) {
-        console.log('Invalid TOTP code.');
-        process.exit(1);
-      }
-
-      const response = await sendToDaemon({ totp: code.trim(), id: commandId });
+      // Send to daemon — it handles both TOTP and password validation
+      const response = await sendToDaemon({ totp: input.trim(), id: commandId });
       const resp = response as Record<string, string>;
       if (resp.status === 'approved') {
         console.log(`Command ${commandId} approved.`);
@@ -237,6 +217,5 @@ export const approveCommand = new Command('approve')
       }
     } finally {
       rl.close();
-      db.close();
     }
   });

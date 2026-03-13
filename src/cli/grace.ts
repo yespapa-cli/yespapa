@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { openDatabase, getConfig, getActiveGracePeriods, createGracePeriod, revokeGracePeriod } from '../db/index.js';
-import { decryptSeed } from '../crypto/index.js';
+import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
 import { createGraceToken, getGraceRemaining, DURATION_1H, DURATION_24H, DURATION_7D } from '../crypto/grace.js';
 import { initializeSupabase } from '../supabase/index.js';
@@ -46,27 +46,42 @@ const activateCommand = new Command('activate')
         process.exit(1);
       }
 
-      // Get seed for TOTP validation and HMAC
+      // Get seed for HMAC
       const encryptedSeed = getConfig(db, 'totp_seed');
       if (!encryptedSeed) {
         console.log('No TOTP seed found. Run "yespapa init" first.');
         process.exit(1);
       }
 
-      const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
-      let seed: string;
-      try {
-        seed = await decryptSeed(encryptedSeed, password);
-      } catch {
-        console.log('Wrong password.');
-        process.exit(1);
+      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      let seed!: string;
+
+      // Try as password first — gives us both auth and seed decryption
+      const passwordHash = getConfig(db, 'removal_password_hash');
+      let authenticated = false;
+      if (passwordHash && await verifyPassword(input, passwordHash)) {
+        try {
+          seed = await decryptSeed(encryptedSeed, input);
+          authenticated = true;
+        } catch {
+          console.log('Password verified but seed decryption failed.');
+          process.exit(1);
+        }
       }
 
-      // Require TOTP confirmation
-      const code = await prompt(rl, 'Enter TOTP code to confirm: ');
-      if (!validateCode(seed, code.trim())) {
-        console.log('Invalid TOTP code.');
-        process.exit(1);
+      if (!authenticated) {
+        // Input might be TOTP — need password to decrypt seed for HMAC
+        const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
+        try {
+          seed = await decryptSeed(encryptedSeed, password);
+        } catch {
+          console.log('Wrong password.');
+          process.exit(1);
+        }
+        if (!validateCode(seed!, input.trim())) {
+          console.log('Invalid TOTP code.');
+          process.exit(1);
+        }
       }
 
       // Create HMAC-signed grace token
@@ -146,26 +161,35 @@ const revokeCommand = new Command('revoke')
         return;
       }
 
-      // Require TOTP
-      const encryptedSeed = getConfig(db, 'totp_seed');
-      if (!encryptedSeed) {
-        console.log('No TOTP seed found.');
-        process.exit(1);
+      // Require TOTP or password
+      const passwordHash = getConfig(db, 'removal_password_hash');
+      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      let authenticated = false;
+
+      // Try as password
+      if (passwordHash && await verifyPassword(input, passwordHash)) {
+        authenticated = true;
       }
 
-      const password = await prompt(rl, 'Enter removal password: ');
-      let seed: string;
-      try {
-        seed = await decryptSeed(encryptedSeed, password);
-      } catch {
-        console.log('Wrong password.');
-        process.exit(1);
-      }
-
-      const code = await prompt(rl, 'Enter TOTP code to confirm revocation: ');
-      if (!validateCode(seed, code.trim())) {
-        console.log('Invalid TOTP code.');
-        process.exit(1);
+      if (!authenticated) {
+        // Try as TOTP via decrypted seed
+        const encryptedSeed = getConfig(db, 'totp_seed');
+        if (!encryptedSeed) {
+          console.log('No TOTP seed found.');
+          process.exit(1);
+        }
+        const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
+        let seed: string;
+        try {
+          seed = await decryptSeed(encryptedSeed, password);
+        } catch {
+          console.log('Wrong password.');
+          process.exit(1);
+        }
+        if (!validateCode(seed, input.trim())) {
+          console.log('Invalid TOTP code.');
+          process.exit(1);
+        }
       }
 
       const supabaseUrl = getConfig(db, 'supabase_url');

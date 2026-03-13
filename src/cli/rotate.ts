@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, writeFileSync } from 'node:fs';
 import { openDatabase, setConfig, getConfig, getActiveGracePeriods, revokeGracePeriod } from '../db/index.js';
-import { decryptSeed, encryptSeed } from '../crypto/index.js';
+import { decryptSeed, encryptSeed, verifyPassword } from '../crypto/index.js';
 import { generateSeed, validateCode } from '../totp/index.js';
 import { displayTotpQR } from '../totp/qr.js';
 
@@ -38,23 +38,41 @@ export const rotateCommand = new Command('rotate-seed')
         process.exit(1);
       }
 
-      // Step 1: Verify current TOTP
-      console.log('\n  Step 1: Verify current TOTP\n');
-      const password = await prompt(rl, '  Enter removal password: ');
-      let oldSeed: string;
-      try {
-        oldSeed = await decryptSeed(encryptedSeed, password);
-      } catch {
-        console.log('  Wrong password.');
-        process.exit(1);
+      // Step 1: Verify identity
+      console.log('\n  Step 1: Verify identity\n');
+      const input = await prompt(rl, '  Enter TOTP code or removal password: ');
+      let password!: string;
+      let oldSeed!: string;
+
+      // Try as password — gives us both auth and seed decryption
+      const passwordHash = getConfig(db, 'removal_password_hash');
+      let authenticated = false;
+      if (passwordHash && await verifyPassword(input, passwordHash)) {
+        try {
+          oldSeed = await decryptSeed(encryptedSeed, input);
+          password = input;
+          authenticated = true;
+        } catch {
+          console.log('  Password verified but seed decryption failed.');
+          process.exit(1);
+        }
       }
 
-      const currentCode = await prompt(rl, '  Enter current TOTP code: ');
-      if (!validateCode(oldSeed, currentCode.trim())) {
-        console.log('  Invalid TOTP code.');
-        process.exit(1);
+      if (!authenticated) {
+        // Input might be TOTP — need password to decrypt seed
+        password = await prompt(rl, '  Enter removal password: ');
+        try {
+          oldSeed = await decryptSeed(encryptedSeed, password);
+        } catch {
+          console.log('  Wrong password.');
+          process.exit(1);
+        }
+        if (!validateCode(oldSeed!, input.trim())) {
+          console.log('  Invalid TOTP code.');
+          process.exit(1);
+        }
       }
-      console.log('  Current TOTP verified.\n');
+      console.log('  Identity verified.\n');
 
       // Step 2: Generate new seed and display QR
       console.log('  Step 2: Scan new QR code with your authenticator\n');

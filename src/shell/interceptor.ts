@@ -97,7 +97,8 @@ yespapa_intercept() {
   fi
   echo "  │  ID:      $cmd_id" >&2
   echo "  ├─────────────────────────────────────────────────┤" >&2
-  echo "  │  Enter TOTP code, or approve via YesPaPa app.   │" >&2
+  echo "  │  Enter TOTP code or removal password, or        │" >&2
+  echo "  │  approve via YesPaPa app.                      │" >&2
   echo "  │  Tip: use --justification \\"reason\\" to help the │" >&2
   echo "  │  approver decide.                               │" >&2
   echo "  └─────────────────────────────────────────────────┘" >&2
@@ -106,7 +107,7 @@ yespapa_intercept() {
   local attempts=0
   local max_polls=180  # 180 polls × 1s = 3 min max wait
   local poll_count=0
-  printf "  Enter TOTP code or approve via app: " >&2
+  printf "  Enter TOTP code or password: " >&2
   while [ $poll_count -lt $max_polls ]; do
     # Poll for remote resolution
     local poll_resp poll_status
@@ -149,7 +150,7 @@ yespapa_intercept() {
         echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&2
         return 1
       fi
-      echo "  Invalid code (attempt $attempts/3). Try again: " >&2
+      echo "  Invalid code or password (attempt $attempts/3). Try again: " >&2
     fi
 
     poll_count=$((poll_count + 1))
@@ -393,17 +394,26 @@ export function isInterceptorInstalled(): boolean {
 
 /**
  * Replace the interceptor script with a cleanup version that unsets all
- * shell functions. When the user sources their shell profile again (or
- * opens a new terminal), this runs and removes the leftover functions.
- * The source line should be removed separately after this.
+ * shell functions, removes the source line from shell profiles, and
+ * self-deletes. The source line is intentionally LEFT in place so that
+ * `source ~/.zshrc` (or opening a new terminal) triggers this cleanup.
  */
 export function writeCleanupInterceptor(): void {
-  if (!existsSync(YESPAPA_DIR)) return;
+  if (!existsSync(YESPAPA_DIR)) {
+    mkdirSync(YESPAPA_DIR, { recursive: true });
+  }
   const unsetLine = `unset -f ${INTERCEPTOR_FUNCTIONS.join(' ')} 2>/dev/null`;
+  // Remove the source line from all shell profiles
+  const profiles = getShellProfiles();
+  const removeCmds = profiles
+    .map((p) => `grep -v '# YesPaPa' "${p}" > "${p}.tmp" 2>/dev/null && mv "${p}.tmp" "${p}" 2>/dev/null`)
+    .join('\n');
   const script = `#!/bin/sh
 # YesPaPa cleanup — this file will self-delete
 ${unsetLine}
+${removeCmds}
 rm -f "${INTERCEPTOR_PATH}" 2>/dev/null
+rmdir "${YESPAPA_DIR}" 2>/dev/null
 `;
   writeFileSync(INTERCEPTOR_PATH, script, { mode: 0o755 });
 }

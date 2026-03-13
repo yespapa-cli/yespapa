@@ -4,10 +4,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync, rmSync } from 'node:fs';
 import { openDatabase, getConfig } from '../db/index.js';
-import { decryptSeed } from '../crypto/index.js';
 import { verifyPassword } from '../crypto/index.js';
-import { validateCode } from '../totp/index.js';
-import { removeInterceptor, INTERCEPTOR_FUNCTIONS } from '../shell/interceptor.js';
+import { writeCleanupInterceptor } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
@@ -31,36 +29,81 @@ export const uninstallCommand = new Command('uninstall')
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
-      // Try TOTP first
       console.log('\n🔒 YesPaPa — Uninstall\n');
       console.log('Authentication required to uninstall.\n');
 
-      const encryptedSeed = getConfig(db, 'totp_seed');
       const passwordHash = getConfig(db, 'removal_password_hash');
+      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
 
-      // Try TOTP
-      const code = await prompt(rl, 'Enter TOTP code (or press Enter to use removal password): ');
+      let authenticated = false;
 
-      if (code.trim()) {
-        // Need to try decrypting seed — but we need the password for that
-        // In the real flow, the daemon has the decrypted seed in memory
-        // For uninstall, we fall through to password if TOTP fails
-        // This is a simplification — in production, the daemon would validate
-        console.log('TOTP validation requires the daemon to be running.');
-        console.log('Falling back to removal password...\n');
+      // Try as password
+      if (passwordHash) {
+        authenticated = await verifyPassword(input, passwordHash);
       }
 
-      // Try removal password
-      const password = await prompt(rl, 'Enter removal password: ');
+      // Try as TOTP via daemon if password didn't match
+      if (!authenticated) {
+        try {
+          const { createConnection } = await import('node:net');
+          const resp = await new Promise<string>((resolve, reject) => {
+            const client = createConnection(SOCKET_PATH);
+            let buffer = '';
+            // We need to send a dummy command first, then the TOTP
+            // Instead, generate a temp command and validate
+            client.on('connect', () => {
+              // Send a command to get an ID, then validate TOTP
+              client.write(JSON.stringify({ command: '__uninstall_check', args: [], fullCommand: '__uninstall_check' }) + '\n');
+            });
+            client.on('data', (data) => {
+              buffer += data.toString();
+              const lines = buffer.split('\n');
+              for (const line of lines) {
+                if (line.trim()) {
+                  client.end();
+                  resolve(line);
+                  return;
+                }
+              }
+            });
+            client.on('error', () => reject(new Error('no daemon')));
+            setTimeout(() => { client.end(); reject(new Error('timeout')); }, 3000);
+          });
 
-      if (!passwordHash) {
-        console.log('No removal password configured. Cannot uninstall.');
-        process.exit(1);
+          const parsed = JSON.parse(resp);
+          if (parsed.status === 'needs_totp') {
+            // Send TOTP
+            const totpResp = await new Promise<string>((resolve, reject) => {
+              const client = createConnection(SOCKET_PATH);
+              let buffer = '';
+              client.on('connect', () => {
+                client.write(JSON.stringify({ totp: input.trim(), id: parsed.id }) + '\n');
+              });
+              client.on('data', (data) => {
+                buffer += data.toString();
+                const lines = buffer.split('\n');
+                for (const line of lines) {
+                  if (line.trim()) {
+                    client.end();
+                    resolve(line);
+                    return;
+                  }
+                }
+              });
+              client.on('error', () => reject(new Error('no daemon')));
+              setTimeout(() => { client.end(); reject(new Error('timeout')); }, 3000);
+            });
+
+            const totpParsed = JSON.parse(totpResp);
+            authenticated = totpParsed.status === 'approved';
+          }
+        } catch {
+          // Daemon not running — TOTP validation not possible without daemon
+        }
       }
 
-      const passwordValid = await verifyPassword(password, passwordHash);
-      if (!passwordValid) {
-        console.log('\n✗ Invalid removal password. Uninstall blocked.');
+      if (!authenticated) {
+        console.log('\n✗ Invalid TOTP code or password. Uninstall blocked.');
         console.log('  This attempt has been logged as a potential tampering event.\n');
         process.exit(1);
       }
@@ -80,11 +123,11 @@ export const uninstallCommand = new Command('uninstall')
         }
       }
 
-      // Remove interceptor from shell profiles (after daemon is stopped)
-      const removed = removeInterceptor();
-      for (const p of removed) {
-        console.log(`  ✓ Removed interceptor from ${p}`);
-      }
+      // Write cleanup interceptor that will run on next `source ~/.zshrc` or new terminal.
+      // It unsets shell functions, removes the source line from profiles, and self-deletes.
+      // The source line is intentionally LEFT in place so sourcing the profile triggers cleanup.
+      writeCleanupInterceptor();
+      console.log(`  ✓ Wrote cleanup interceptor`);
 
       // Close database before deleting
       db.close();
@@ -95,19 +138,16 @@ export const uninstallCommand = new Command('uninstall')
         console.log(`  ✓ Removed socket (${SOCKET_PATH})`);
       }
 
-      // Delete ~/.yespapa/
-      rmSync(YESPAPA_DIR, { recursive: true, force: true });
-      console.log(`  ✓ Removed ${YESPAPA_DIR}`);
+      // Delete ~/.yespapa/ contents EXCEPT interceptor.sh (needed for cleanup on next source)
+      const { readdirSync } = await import('node:fs');
+      for (const entry of readdirSync(YESPAPA_DIR)) {
+        if (entry === 'interceptor.sh') continue;
+        rmSync(join(YESPAPA_DIR, entry), { recursive: true, force: true });
+      }
+      console.log(`  ✓ Removed ${YESPAPA_DIR} contents`);
 
       console.log('\n🗑️  YesPaPa has been completely uninstalled.\n');
-
-      // Shell functions from the interceptor persist in the current session.
-      // The user must clean them up to avoid "Daemon not running" errors.
-      const unsetCmd = `unset -f ${INTERCEPTOR_FUNCTIONS.join(' ')} 2>/dev/null`;
-      console.log('⚠️  Your current shell still has YesPaPa functions loaded.');
-      console.log('   Run one of these to finish cleanup:\n');
-      console.log(`   exec $SHELL`);
-      console.log(`   ${unsetCmd}\n`);
+      console.log('Run `source ~/.zshrc` or open a new terminal to finish cleanup.\n');
     } catch (error) {
       console.error('Uninstall failed:', error);
       process.exit(1);

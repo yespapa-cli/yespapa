@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { openDatabase, getConfig, setConfig } from '../db/index.js';
-import { decryptSeed } from '../crypto/index.js';
+import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
 
 const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
@@ -36,26 +36,36 @@ const setCommand = new Command('set')
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
-      // Require TOTP to change config
+      // Require TOTP or password to change config
       const encryptedSeed = getConfig(db, 'totp_seed');
       if (!encryptedSeed) {
         console.log('No TOTP seed found.');
         process.exit(1);
       }
 
-      const password = await prompt(rl, 'Enter removal password: ');
-      let seed: string;
-      try {
-        seed = await decryptSeed(encryptedSeed, password);
-      } catch {
-        console.log('Wrong password.');
-        process.exit(1);
+      const input = await prompt(rl, 'Enter TOTP code or removal password: ');
+      let authenticated = false;
+
+      // Try as password
+      const passwordHash = getConfig(db, 'removal_password_hash');
+      if (passwordHash && await verifyPassword(input, passwordHash)) {
+        authenticated = true;
       }
 
-      const code = await prompt(rl, 'Enter TOTP code: ');
-      if (!validateCode(seed, code.trim())) {
-        console.log('Invalid TOTP code.');
-        process.exit(1);
+      if (!authenticated) {
+        // Try as TOTP — need password to decrypt seed
+        const password = await prompt(rl, 'Enter removal password to decrypt seed: ');
+        let seed: string;
+        try {
+          seed = await decryptSeed(encryptedSeed, password);
+        } catch {
+          console.log('Wrong password.');
+          process.exit(1);
+        }
+        if (!validateCode(seed, input.trim())) {
+          console.log('Invalid TOTP code.');
+          process.exit(1);
+        }
       }
 
       setConfig(db, key, value);
