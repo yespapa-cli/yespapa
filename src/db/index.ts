@@ -208,3 +208,15 @@ export function revokeGracePeriod(db: Database.Database, id: string): void {
   const now = new Date().toISOString();
   db.prepare('UPDATE grace_periods SET expires_at = ? WHERE id = ?').run(now, id);
 }
+
+export function upsertGracePeriod(
+  db: Database.Database,
+  id: string,
+  scope: string,
+  expiresAt: string,
+  hmacSignature: string,
+): void {
+  db.prepare(
+    'INSERT INTO grace_periods (id, scope, expires_at, hmac_signature) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET scope = excluded.scope, expires_at = excluded.expires_at, hmac_signature = excluded.hmac_signature',
+  ).run(id, scope, expiresAt, hmacSignature);
+}

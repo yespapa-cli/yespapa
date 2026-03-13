@@ -8,7 +8,7 @@
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDatabase, setConfig, getConfig, getActiveGracePeriods, createGracePeriod, revokeGracePeriod } from '../db/index.js';
+import { openDatabase, setConfig, getConfig, getActiveGracePeriods, createGracePeriod, revokeGracePeriod, upsertGracePeriod } from '../db/index.js';
 import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
 import type { PasswordValidator } from './socket.js';
@@ -149,16 +149,8 @@ async function main(): Promise<void> {
               return;
             }
 
-            try {
-              createGracePeriod(db, id, scope, expiresAt, hmac);
-              log(`Remote auto-bypass synced: ${id} (${scope}, expires ${expiresAt})`);
-            } catch {
-              // Already exists — this is an update, not an insert
-              // Could be a revocation that arrived with expires_at slightly in the future
-              revokeGracePeriod(db, id);
-              createGracePeriod(db, id, scope, expiresAt, hmac);
-              log(`Remote auto-bypass updated: ${id}`);
-            }
+            upsertGracePeriod(db, id, scope, expiresAt, hmac);
+            log(`Remote auto-bypass synced: ${id} (${scope}, expires ${expiresAt})`);
           },
           (msg) => log(`[sync] ${msg}`),
         );
@@ -179,13 +171,7 @@ async function main(): Promise<void> {
             return;
           }
 
-          try {
-            createGracePeriod(db, id, scope, expiresAt, hmac);
-          } catch {
-            // Already exists — update it
-            revokeGracePeriod(db, id);
-            createGracePeriod(db, id, scope, expiresAt, hmac);
-          }
+          upsertGracePeriod(db, id, scope, expiresAt, hmac);
         };
         setInterval(() => {
           fetchGracePeriods(supabase, supabaseHostId, gracePollHandler).catch(() => {});
