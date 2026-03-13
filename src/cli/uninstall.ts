@@ -7,7 +7,7 @@ import { openDatabase, getConfig } from '../db/index.js';
 import { decryptSeed } from '../crypto/index.js';
 import { verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
-import { removeInterceptor } from '../shell/interceptor.js';
+import { removeInterceptor, INTERCEPTOR_FUNCTIONS } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
@@ -73,8 +73,8 @@ export const uninstallCommand = new Command('uninstall')
         try {
           process.kill(parseInt(daemonPid, 10), 'SIGTERM');
           console.log(`  ✓ Stopped daemon (PID: ${daemonPid})`);
-          // Brief wait for daemon to exit before removing interceptor
-          await new Promise((resolve) => setTimeout(resolve, 500));
+          // Wait for daemon to fully exit before removing interceptor
+          await new Promise((resolve) => setTimeout(resolve, 1500));
         } catch {
           console.log(`  - Daemon not running (PID: ${daemonPid})`);
         }
@@ -100,6 +100,14 @@ export const uninstallCommand = new Command('uninstall')
       console.log(`  ✓ Removed ${YESPAPA_DIR}`);
 
       console.log('\n🗑️  YesPaPa has been completely uninstalled.\n');
+
+      // Shell functions from the interceptor persist in the current session.
+      // The user must clean them up to avoid "Daemon not running" errors.
+      const unsetCmd = `unset -f ${INTERCEPTOR_FUNCTIONS.join(' ')} 2>/dev/null`;
+      console.log('⚠️  Your current shell still has YesPaPa functions loaded.');
+      console.log('   Run one of these to finish cleanup:\n');
+      console.log(`   exec $SHELL`);
+      console.log(`   ${unsetCmd}\n`);
     } catch (error) {
       console.error('Uninstall failed:', error);
       process.exit(1);

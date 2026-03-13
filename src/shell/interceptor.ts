@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { SOCKET_PATH } from '../daemon/socket.js';
@@ -6,6 +6,15 @@ import { SOCKET_PATH } from '../daemon/socket.js';
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const INTERCEPTOR_PATH = join(YESPAPA_DIR, 'interceptor.sh');
 const SOURCE_LINE = '[ -f ~/.yespapa/interceptor.sh ] && source ~/.yespapa/interceptor.sh # YesPaPa';
+
+/**
+ * List of shell functions defined by the interceptor.
+ * Used for cleanup during uninstall.
+ */
+export const INTERCEPTOR_FUNCTIONS = [
+  'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill',
+  'yespapa_intercept', 'yespapa_send', 'yespapa_json_field',
+];
 
 /**
  * Generate the shell interceptor script.
@@ -241,7 +250,7 @@ export function getShellProfiles(): string[] {
   const home = homedir();
   const profiles: string[] = [];
 
-  const candidates = ['.bashrc', '.zshrc', '.bash_profile'];
+  const candidates = ['.bashrc', '.zshrc', '.bash_profile', '.zshenv', '.zprofile', '.profile'];
   for (const name of candidates) {
     const path = join(home, name);
     if (existsSync(path)) {
@@ -380,6 +389,32 @@ export function isInterceptorInstalled(): boolean {
     if (!hasActiveLine) return false;
   }
   return true;
+}
+
+/**
+ * Replace the interceptor script with a cleanup version that unsets all
+ * shell functions. When the user sources their shell profile again (or
+ * opens a new terminal), this runs and removes the leftover functions.
+ * The source line should be removed separately after this.
+ */
+export function writeCleanupInterceptor(): void {
+  if (!existsSync(YESPAPA_DIR)) return;
+  const unsetLine = `unset -f ${INTERCEPTOR_FUNCTIONS.join(' ')} 2>/dev/null`;
+  const script = `#!/bin/sh
+# YesPaPa cleanup — this file will self-delete
+${unsetLine}
+rm -f "${INTERCEPTOR_PATH}" 2>/dev/null
+`;
+  writeFileSync(INTERCEPTOR_PATH, script, { mode: 0o755 });
+}
+
+/**
+ * Delete the interceptor script file.
+ */
+export function deleteInterceptorFile(): void {
+  if (existsSync(INTERCEPTOR_PATH)) {
+    unlinkSync(INTERCEPTOR_PATH);
+  }
 }
 
 function escapeRegex(str: string): string {
