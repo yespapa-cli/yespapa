@@ -11,6 +11,21 @@ export interface PairingData {
 }
 
 /**
+ * Combined pairing payload — includes TOTP seed so the mobile app
+ * can pair AND receive the TOTP secret in a single QR scan.
+ */
+export interface CombinedPairingData {
+  type: 'yespapa';
+  totp_seed: string;        // Base32
+  host_name: string;
+  supabase_url: string;
+  supabase_anon_key: string;
+  host_id: string;
+  pairing_token: string;
+  refresh_token?: string;
+}
+
+/**
  * Generate a one-time pairing token (32 random bytes, hex-encoded).
  */
 export function generatePairingToken(): string {
@@ -41,6 +56,39 @@ export function createPairingPayload(
  * The QR encodes the JSON payload as a string.
  */
 export async function generatePairingQR(payload: PairingData): Promise<string> {
+  const jsonStr = JSON.stringify(payload);
+  return generateQRString(jsonStr);
+}
+
+/**
+ * Create a combined pairing payload that includes the TOTP seed.
+ * This allows the mobile app to pair and receive the TOTP secret in one scan.
+ */
+export function createCombinedPayload(
+  totpSeed: string,
+  hostName: string,
+  supabaseUrl: string,
+  supabaseAnonKey: string,
+  hostId: string,
+  pairingToken: string,
+  refreshToken?: string,
+): CombinedPairingData {
+  return {
+    type: 'yespapa',
+    totp_seed: totpSeed,
+    host_name: hostName,
+    supabase_url: supabaseUrl,
+    supabase_anon_key: supabaseAnonKey,
+    host_id: hostId,
+    pairing_token: pairingToken,
+    refresh_token: refreshToken,
+  };
+}
+
+/**
+ * Generate a QR code for the combined pairing payload.
+ */
+export async function generateCombinedQR(payload: CombinedPairingData): Promise<string> {
   const jsonStr = JSON.stringify(payload);
   return generateQRString(jsonStr);
 }

@@ -3,6 +3,8 @@ import {
   generatePairingToken,
   createPairingPayload,
   generatePairingQR,
+  createCombinedPayload,
+  generateCombinedQR,
 } from '../supabase/pairing.js';
 
 describe('pairing module', () => {
@@ -47,6 +49,72 @@ describe('pairing module', () => {
       expect(typeof qr).toBe('string');
       // QR should contain the encoded data
       expect(qr.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('createCombinedPayload', () => {
+    it('creates a combined payload with type field and all fields', () => {
+      const payload = createCombinedPayload(
+        'JBSWY3DPEHPK3PXP',
+        'my-host',
+        'https://test.supabase.co',
+        'anon-key-123',
+        'host-uuid',
+        'token-abc',
+        'refresh-token-xyz',
+      );
+      expect(payload.type).toBe('yespapa');
+      expect(payload.totp_seed).toBe('JBSWY3DPEHPK3PXP');
+      expect(payload.host_name).toBe('my-host');
+      expect(payload.supabase_url).toBe('https://test.supabase.co');
+      expect(payload.supabase_anon_key).toBe('anon-key-123');
+      expect(payload.host_id).toBe('host-uuid');
+      expect(payload.pairing_token).toBe('token-abc');
+      expect(payload.refresh_token).toBe('refresh-token-xyz');
+    });
+
+    it('omits refresh_token when not provided', () => {
+      const payload = createCombinedPayload(
+        'SEED123',
+        'host',
+        'https://sb.co',
+        'key',
+        'hid',
+        'tok',
+      );
+      expect(payload.refresh_token).toBeUndefined();
+    });
+  });
+
+  describe('generateCombinedQR', () => {
+    it('generates a QR string from combined payload', async () => {
+      const payload = createCombinedPayload(
+        'JBSWY3DPEHPK3PXP',
+        'my-host',
+        'https://test.supabase.co',
+        'anon-key-123',
+        'host-uuid',
+        'token-abc',
+      );
+      const qr = await generateCombinedQR(payload);
+      expect(qr).toBeTruthy();
+      expect(typeof qr).toBe('string');
+      expect(qr.length).toBeGreaterThan(0);
+    });
+
+    it('payload JSON is within QR capacity', () => {
+      const payload = createCombinedPayload(
+        'JBSWY3DPEHPK3PXP',
+        'my-long-hostname-example',
+        'https://izvdpjcqrrcxhokwycgu.supabase.co',
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.xxx',
+        'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+        'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
+        'some-refresh-token-value',
+      );
+      const jsonStr = JSON.stringify(payload);
+      // QR code max capacity is 4,296 alphanumeric chars
+      expect(jsonStr.length).toBeLessThan(4296);
     });
   });
 });
