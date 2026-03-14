@@ -5,6 +5,8 @@ import {
   generatePairingQR,
   createCombinedPayload,
   generateCombinedQR,
+  generatePairingUrl,
+  generatePairingWebUrl,
 } from '../remote/pairing.js';
 
 describe('pairing module', () => {
@@ -115,6 +117,50 @@ describe('pairing module', () => {
       const jsonStr = JSON.stringify(payload);
       // QR code max capacity is 4,296 alphanumeric chars
       expect(jsonStr.length).toBeLessThan(4296);
+    });
+  });
+
+  describe('generatePairingUrl', () => {
+    it('generates a yespapa:// deep-link URL with base64url-encoded data', () => {
+      const payload = createCombinedPayload(
+        'JBSWY3DPEHPK3PXP',
+        'my-host',
+        'https://test.supabase.co',
+        'anon-key-123',
+        'host-uuid',
+        'token-abc',
+      );
+      const url = generatePairingUrl(payload);
+      expect(url).toMatch(/^yespapa:\/\/pair\?data=/);
+
+      // Decode and verify round-trip
+      const dataParam = new URL(url).searchParams.get('data')!;
+      const decoded = JSON.parse(Buffer.from(dataParam, 'base64url').toString());
+      expect(decoded.type).toBe('yespapa');
+      expect(decoded.totp_seed).toBe('JBSWY3DPEHPK3PXP');
+      expect(decoded.host_name).toBe('my-host');
+      expect(decoded.host_id).toBe('host-uuid');
+    });
+  });
+
+  describe('generatePairingWebUrl', () => {
+    it('generates a https://yespapa.app/pair URL', () => {
+      const payload = createCombinedPayload(
+        'SEED',
+        'host',
+        'https://sb.co',
+        'key',
+        'hid',
+        'tok',
+      );
+      const url = generatePairingWebUrl(payload);
+      expect(url).toMatch(/^https:\/\/yespapa\.app\/pair\?data=/);
+
+      // Verify round-trip
+      const dataParam = new URL(url).searchParams.get('data')!;
+      const decoded = JSON.parse(Buffer.from(dataParam, 'base64url').toString());
+      expect(decoded.type).toBe('yespapa');
+      expect(decoded.host_id).toBe('hid');
     });
   });
 });

@@ -94,6 +94,26 @@ export async function generateCombinedQR(payload: CombinedPairingData): Promise<
 }
 
 /**
+ * Generate a deep-link pairing URL for the YesPaPa mobile app.
+ * Uses `yespapa://pair?data={base64}` custom scheme.
+ * The base64 payload contains the same data as CombinedPairingData.
+ */
+export function generatePairingUrl(payload: CombinedPairingData): string {
+  const jsonStr = JSON.stringify(payload);
+  const base64 = Buffer.from(jsonStr).toString('base64url');
+  return `yespapa://pair?data=${base64}`;
+}
+
+/**
+ * Generate a HTTPS fallback pairing URL (for universal links / no-app-installed case).
+ */
+export function generatePairingWebUrl(payload: CombinedPairingData): string {
+  const jsonStr = JSON.stringify(payload);
+  const base64 = Buffer.from(jsonStr).toString('base64url');
+  return `https://yespapa.app/pair?data=${base64}`;
+}
+
+/**
  * Store the pairing token in the remote hosts table for validation.
  * The mobile app will present this token when pairing.
  */

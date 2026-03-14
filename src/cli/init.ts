@@ -13,7 +13,8 @@ import { seedDefaultRules } from '../rules/index.js';
 import { injectInterceptor } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
 import { initializeRemote, authenticateAnonymous, registerHost, generateHostFingerprint } from '../remote/index.js';
-import { generatePairingToken, createCombinedPayload, generateCombinedQR, storePairingToken } from '../remote/pairing.js';
+import { generatePairingToken, createCombinedPayload, storePairingToken, generatePairingUrl, generatePairingWebUrl } from '../remote/pairing.js';
+import { generateQRString } from '../totp/qr.js';
 
 // Default remote server (YesPaPa management server)
 const DEFAULT_REMOTE_URL = 'https://izvdpjcqrrcxhokwycgu.supabase.co';
@@ -106,19 +107,27 @@ export const initCommand = new Command('init')
           console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
           remoteHostId = hostRecord.id;
 
-          // Generate combined QR (TOTP seed + pairing data in one scan)
+          // Generate pairing data
           const pairingToken = generatePairingToken();
           await storePairingToken(remote, hostRecord.id, pairingToken);
           const combinedPayload = createCombinedPayload(
             seed, hostName, remoteUrl, remoteKey,
             hostRecord.id, pairingToken, refreshToken,
           );
-          const qrStr = await generateCombinedQR(combinedPayload);
-          console.log('\n  Scan this QR code with the YesPaPa mobile app:');
-          console.log('  (It contains both TOTP seed and pairing data — one scan does it all)\n');
-          console.log(qrStr);
 
-          // Also show text fallback for paste
+          // Display 1: Standard otpauth:// QR (scannable by any authenticator)
+          console.log('\n  ── TOTP Authenticator QR ──');
+          console.log('  Scan with Google Authenticator, Authy, 1Password, or any TOTP app:\n');
+          await displayTotpQR(seed, hostName);
+
+          // Display 2: Deep-link pairing URL for YesPaPa app
+          const pairingUrl = generatePairingUrl(combinedPayload);
+          const pairingWebUrl = generatePairingWebUrl(combinedPayload);
+          const pairingQR = await generateQRString(pairingUrl);
+          console.log('  ── YesPaPa App Pairing QR ──');
+          console.log('  Scan with your phone camera to open the YesPaPa app and pair:\n');
+          console.log(pairingQR);
+          console.log(`\n  Pairing link: ${pairingWebUrl}`);
           console.log(`\n  Can't scan? Paste this in the app: ${JSON.stringify(combinedPayload)}\n`);
         } catch (err) {
           console.log(`  ✗ Remote connection failed: ${err}`);
