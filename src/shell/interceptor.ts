@@ -29,9 +29,24 @@ export function generateInterceptorScript(socketPath: string = SOCKET_PATH): str
 export PATH="$HOME/.yespapa/bin:$PATH"
 
 # Send JSON to daemon and read response
-yespapa_send() {
-  echo "$1" | nc -U ${socketPath} 2>/dev/null
-}
+# zsocket (zsh) properly blocks until the response arrives, handling both
+# sync (TOTP) and async (argon2 password) validation with zero overhead.
+# Falls back to nc for bash (master key bypass unavailable in bash).
+if zmodload zsh/net/socket 2>/dev/null; then
+  yespapa_send() {
+    local _yp_fd _yp_line
+    zsocket ${socketPath} 2>/dev/null || return 1
+    _yp_fd=$REPLY
+    print -u $_yp_fd "$1"
+    read -r _yp_line <&$_yp_fd || true
+    exec {_yp_fd}>&-
+    printf '%s' "$_yp_line"
+  }
+else
+  yespapa_send() {
+    printf '%s\\n' "$1" | nc -U ${socketPath} 2>/dev/null
+  }
+fi
 
 # Extract a JSON string field value
 yespapa_json_field() {

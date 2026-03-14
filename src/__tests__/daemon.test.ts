@@ -119,6 +119,54 @@ describe('daemon socket server (two-phase protocol)', () => {
     expect(cmd?.justification).toBe('clearing build artifacts');
   });
 
+  it('approves after valid master key submission', async () => {
+    // Restart with password validator
+    await stopDaemonServer(server, TEST_SOCKET);
+    server = await startDaemonServer(
+      db,
+      () => false, // TOTP always invalid
+      () => null,
+      TEST_SOCKET,
+      undefined,
+      undefined,
+      async (input: string) => input === 'my-master-key',
+    );
+
+    const phase1 = await sendMessage({
+      command: 'rm',
+      args: ['-rf', './dist'],
+      fullCommand: 'rm -rf ./dist',
+    });
+    expect(phase1.status).toBe('needs_totp');
+
+    const phase2 = await sendMessage({ totp: 'my-master-key', id: phase1.id });
+    expect(phase2.status).toBe('approved');
+  });
+
+  it('denies after invalid master key submission', async () => {
+    // Restart with password validator
+    await stopDaemonServer(server, TEST_SOCKET);
+    server = await startDaemonServer(
+      db,
+      () => false, // TOTP always invalid
+      () => null,
+      TEST_SOCKET,
+      undefined,
+      undefined,
+      async (input: string) => input === 'my-master-key',
+    );
+
+    const phase1 = await sendMessage({
+      command: 'rm',
+      args: ['-rf', './dist'],
+      fullCommand: 'rm -rf ./dist',
+    });
+    expect(phase1.status).toBe('needs_totp');
+
+    const phase2 = await sendMessage({ totp: 'wrong-password', id: phase1.id });
+    expect(phase2.status).toBe('denied');
+  });
+
   it('auto-approves when auto-bypass is active', async () => {
     // Restart with grace checker that returns a match
     await stopDaemonServer(server, TEST_SOCKET);

@@ -32,7 +32,7 @@ export interface TotpSubmission {
 
 /**
  * A poll-check from the interceptor: { check: "cmd_xxx" }
- * Used to poll for remote resolution (Supabase approval/denial).
+ * Used to poll for remote resolution (approval/denial from mobile app).
  */
 export interface PollCheck {
   check: string;
@@ -54,11 +54,11 @@ export type GraceChecker = (bundle?: string) => GraceMatch | null;
 export type OnCommandPending = (commandId: string, command: string, justification?: string) => void;
 export type OnCommandResolved = (commandId: string, status: string, source?: string) => void;
 
-// Track remotely resolved commands (set by sync module when Supabase approval arrives)
+// Track remotely resolved commands (set by sync module when remote approval arrives)
 const remoteResolutions = new Map<string, RemoteResolution>();
 
 /**
- * Record a remote resolution (called by sync module when Supabase approval/denial arrives).
+ * Record a remote resolution (called by sync module when remote approval/denial arrives).
  */
 export function setRemoteResolution(commandId: string, resolution: RemoteResolution): void {
   remoteResolutions.set(commandId, resolution);
@@ -242,6 +242,7 @@ function handleMessage(
 function sendResponse(socket: Socket, response: CommandResponse): void {
   try {
     socket.write(JSON.stringify(response) + '\n');
+    socket.end();
   } catch {
     // Socket already closed
   }
