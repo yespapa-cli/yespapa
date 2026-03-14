@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 export type CommandStatus = 'pending' | 'approved' | 'denied' | 'timeout' | 'grace';
-export type ApprovalSource = 'totp_stdin' | 'app_approve' | 'grace_token';
+export type ApprovalSource = 'totp_stdin' | 'app_approve' | 'grace_token' | 'sudo_bypass';
 export type RuleAction = 'deny' | 'allow';
 
 export interface ConfigRow {
@@ -59,7 +59,7 @@ const SCHEMA = `
     command TEXT NOT NULL,
     justification TEXT,
     status TEXT NOT NULL CHECK(status IN ('pending', 'approved', 'denied', 'timeout', 'grace')),
-    approval_source TEXT CHECK(approval_source IN ('totp_stdin', 'app_approve', 'grace_token')),
+    approval_source TEXT CHECK(approval_source IN ('totp_stdin', 'app_approve', 'grace_token', 'sudo_bypass')),
     message TEXT,
     created_at TEXT DEFAULT (datetime('now')),
     resolved_at TEXT

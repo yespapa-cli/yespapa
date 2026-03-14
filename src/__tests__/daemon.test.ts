@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createConnection } from 'node:net';
 import type { Server } from 'node:net';
 import type Database from 'better-sqlite3';
-import { openMemoryDatabase, getCommand } from '../db/index.js';
+import { openMemoryDatabase, getCommand, setConfig } from '../db/index.js';
 import { seedDefaultRules } from '../rules/index.js';
 import { generateSeed, generateCode } from '../totp/index.js';
 import { startDaemonServer, stopDaemonServer, type CommandRequest, type CommandResponse, type TotpSubmission } from '../daemon/socket.js';
@@ -185,5 +185,31 @@ describe('daemon socket server (two-phase protocol)', () => {
     expect(response.status).toBe('approved');
     expect(response.message).toContain('Auto-bypass');
     expect(response.message).toContain('1h 0m');
+  });
+
+  it('auto-approves sudo when allow_sudo_bypass is true (default)', async () => {
+    const response = await sendMessage({
+      command: 'sudo',
+      args: ['rm', '-rf', '/tmp/test'],
+      fullCommand: 'sudo rm -rf /tmp/test',
+    });
+    expect(response.status).toBe('approved');
+    expect(response.message).toContain('sudo bypass');
+
+    // Verify logged with sudo_bypass source
+    const cmd = getCommand(db, response.id);
+    expect(cmd?.status).toBe('approved');
+    expect(cmd?.approval_source).toBe('sudo_bypass');
+  });
+
+  it('requires TOTP for sudo when allow_sudo_bypass is false', async () => {
+    setConfig(db, 'allow_sudo_bypass', 'false');
+
+    const response = await sendMessage({
+      command: 'sudo',
+      args: ['rm', '-rf', '/tmp/test'],
+      fullCommand: 'sudo rm -rf /tmp/test',
+    });
+    expect(response.status).toBe('needs_totp');
   });
 });

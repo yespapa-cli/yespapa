@@ -2,7 +2,7 @@ import { createServer, type Server, type Socket } from 'node:net';
 import { existsSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { createCommand, resolveCommand, type CommandStatus, type ApprovalSource } from '../db/index.js';
+import { createCommand, resolveCommand, getConfig, type CommandStatus, type ApprovalSource } from '../db/index.js';
 import { evaluateCommand } from '../rules/index.js';
 
 export const SOCKET_PATH = '/tmp/yespapa.sock';
@@ -225,6 +225,23 @@ function handleMessage(
       message: `Auto-bypass (${graceMatch.scope}, expires in ${graceMatch.remaining})`,
     });
     return;
+  }
+
+  // Check sudo bypass: if command is sudo and allow_sudo_bypass is true (default), auto-approve
+  if (command === 'sudo') {
+    const sudoBypass = getConfig(db, 'allow_sudo_bypass');
+    if (sudoBypass !== 'false') {
+      createCommand(db, commandId, cmdStr, justification);
+      resolveCommand(db, commandId, 'approved', 'sudo_bypass');
+      onCommandResolved?.(commandId, 'approved', 'sudo_bypass');
+      sendResponse(socket, {
+        status: 'approved',
+        id: commandId,
+        command: cmdStr,
+        message: 'Approved (sudo bypass)',
+      });
+      return;
+    }
   }
 
   // Needs TOTP — log command and ask interceptor to prompt user

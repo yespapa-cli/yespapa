@@ -9,7 +9,7 @@ import { validateCode } from '../totp/index.js';
 
 const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
 
-const ALLOWED_KEYS = ['allow_password_bypass', 'default_timeout'];
+const ALLOWED_KEYS = ['allow_password_bypass', 'default_timeout', 'allow_sudo_bypass', 'allow_remote_exec'];
 
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise((resolve) => {
