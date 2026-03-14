@@ -16,10 +16,10 @@ const BACKOFF_MAX_MS = 60_000;
 
 /**
  * Create a reconnection manager with exponential backoff.
- * Handles Supabase Realtime subscriptions with automatic reconnection.
+ * Handles Realtime subscriptions with automatic reconnection.
  */
 export function createReconnectManager(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   hostId: string,
   validateTotp: TotpValidator,
   onStateChange?: (state: ConnectionState) => void,
@@ -44,23 +44,20 @@ export function createReconnectManager(
   function connect(): void {
     try {
       const syncConfig: SyncConfig = {
-        supabase,
+        client: remote,
         hostId,
         validateTotp,
         onCommandResolved,
         log: onLog,
       };
 
-      // Single consolidated channel for both commands and grace_periods
       subscribeToHostChannel(syncConfig, onGracePeriod);
-
-      // Catch up on any missed grace period changes (e.g. revocations during disconnect)
-      fetchGracePeriods(supabase, hostId, onGracePeriod, onLog).catch(() => {});
+      fetchGracePeriods(remote, hostId, onGracePeriod, onLog).catch(() => {});
 
       setState('connected');
       retryCount = 0;
     } catch (error) {
-      console.error('[YesPaPa] Supabase connection failed:', error);
+      console.error('[YesPaPa] Remote connection failed:', error);
       scheduleReconnect();
     }
   }
@@ -84,14 +81,14 @@ export function createReconnectManager(
       clearTimeout(retryTimer);
       retryTimer = null;
     }
-    supabase.removeAllChannels();
+    remote.removeAllChannels();
     setState('disconnected');
     retryCount = 0;
   }
 
   return {
     getState: () => state,
-    getChannelCount: () => getChannelCount(supabase),
+    getChannelCount: () => getChannelCount(remote),
     connect,
     disconnect,
   };

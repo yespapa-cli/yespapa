@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { pushCommand, syncCommandResolution, getChannelCount, subscribeToHostChannel } from '../supabase/sync.js';
+import { pushCommand, syncCommandResolution, getChannelCount, subscribeToHostChannel } from '../remote/sync.js';
 
-describe('supabase sync module', () => {
+describe('remote sync module', () => {
   const mockInsert = vi.fn().mockResolvedValue({ error: null });
   const mockUpdate = vi.fn().mockReturnValue({
     eq: vi.fn().mockResolvedValue({ error: null }),
   });
   const mockFunctionsInvoke = vi.fn().mockResolvedValue({ data: { status: 'ok' }, error: null });
-  const mockSupabase = {
+  const mockRemote = {
     from: vi.fn().mockImplementation(() => ({
       insert: mockInsert,
       update: mockUpdate,
@@ -29,8 +29,8 @@ describe('supabase sync module', () => {
 
   describe('pushCommand', () => {
     it('inserts a command into the commands table', async () => {
-      await pushCommand(mockSupabase, 'host-123', 'cmd_abc', 'rm -rf ./dist');
-      expect(mockSupabase.from).toHaveBeenCalledWith('commands');
+      await pushCommand(mockRemote, 'host-123', 'cmd_abc', 'rm -rf ./dist');
+      expect(mockRemote.from).toHaveBeenCalledWith('commands');
       expect(mockInsert).toHaveBeenCalledWith({
         id: 'cmd_abc',
         host_id: 'host-123',
@@ -42,14 +42,14 @@ describe('supabase sync module', () => {
     });
 
     it('includes justification when provided', async () => {
-      await pushCommand(mockSupabase, 'host-123', 'cmd_def', 'rm -rf ./dist', 'clearing build');
+      await pushCommand(mockRemote, 'host-123', 'cmd_def', 'rm -rf ./dist', 'clearing build');
       expect(mockInsert).toHaveBeenCalledWith(
         expect.objectContaining({ justification: 'clearing build' }),
       );
     });
 
     it('includes timeout when provided', async () => {
-      await pushCommand(mockSupabase, 'host-123', 'cmd_ghi', 'rm -rf ./test', undefined, 120);
+      await pushCommand(mockRemote, 'host-123', 'cmd_ghi', 'rm -rf ./test', undefined, 120);
       expect(mockInsert).toHaveBeenCalledWith(
         expect.objectContaining({ timeout_seconds: 120 }),
       );
@@ -58,12 +58,12 @@ describe('supabase sync module', () => {
     it('throws on insert failure', async () => {
       mockInsert.mockResolvedValueOnce({ error: { message: 'Insert failed' } });
       await expect(
-        pushCommand(mockSupabase, 'host-123', 'cmd_fail', 'rm -rf /'),
+        pushCommand(mockRemote, 'host-123', 'cmd_fail', 'rm -rf /'),
       ).rejects.toThrow('Insert failed');
     });
 
     it('calls push_notification edge function after insert', async () => {
-      await pushCommand(mockSupabase, 'host-123', 'cmd_push', 'rm -rf ./dist');
+      await pushCommand(mockRemote, 'host-123', 'cmd_push', 'rm -rf ./dist');
       // Wait for the async push notification call
       await vi.waitFor(() => {
         expect(mockFunctionsInvoke).toHaveBeenCalledWith('push_notification', {
@@ -78,7 +78,7 @@ describe('supabase sync module', () => {
   });
 
   describe('getChannelCount', () => {
-    it('returns channel count from supabase client', () => {
+    it('returns channel count from remote client', () => {
       const mockClient = {
         getChannels: vi.fn().mockReturnValue([{ name: 'ch1' }, { name: 'ch2' }]),
       } as unknown as import('@supabase/supabase-js').SupabaseClient;
@@ -98,7 +98,7 @@ describe('supabase sync module', () => {
       } as unknown as import('@supabase/supabase-js').SupabaseClient;
 
       subscribeToHostChannel(
-        { supabase: client, hostId: 'host-1', validateTotp: () => true },
+        { client, hostId: 'host-1', validateTotp: () => true },
         () => {},
       );
 
@@ -111,9 +111,9 @@ describe('supabase sync module', () => {
   });
 
   describe('syncCommandResolution', () => {
-    it('updates the command status in Supabase', async () => {
-      await syncCommandResolution(mockSupabase, 'cmd_abc', 'approved', 'totp_stdin');
-      expect(mockSupabase.from).toHaveBeenCalledWith('commands');
+    it('updates the command status on remote', async () => {
+      await syncCommandResolution(mockRemote, 'cmd_abc', 'approved', 'totp_stdin');
+      expect(mockRemote.from).toHaveBeenCalledWith('commands');
       expect(mockUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'approved' }),
       );
@@ -124,7 +124,7 @@ describe('supabase sync module', () => {
         eq: vi.fn().mockResolvedValue({ error: { message: 'Update failed' } }),
       });
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await syncCommandResolution(mockSupabase, 'cmd_fail', 'denied');
+      await syncCommandResolution(mockRemote, 'cmd_fail', 'denied');
       expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Update failed'));
       consoleSpy.mockRestore();
     });

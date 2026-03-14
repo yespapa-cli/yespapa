@@ -12,10 +12,10 @@ import { hashPassword, encryptSeed } from '../crypto/index.js';
 import { seedDefaultRules } from '../rules/index.js';
 import { injectInterceptor } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
-import { initializeSupabase, authenticateAnonymous, registerHost, generateHostFingerprint } from '../supabase/index.js';
-import { generatePairingToken, createCombinedPayload, generateCombinedQR, storePairingToken } from '../supabase/pairing.js';
+import { initializeRemote, authenticateAnonymous, registerHost, generateHostFingerprint } from '../remote/index.js';
+import { generatePairingToken, createCombinedPayload, generateCombinedQR, storePairingToken } from '../remote/pairing.js';
 
-// Default remote server (YesPaPa management server, currently backed by Supabase)
+// Default remote server (YesPaPa management server)
 const DEFAULT_REMOTE_URL = 'https://izvdpjcqrrcxhokwycgu.supabase.co';
 const DEFAULT_REMOTE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml6dmRwamNxcnJjeGhva3d5Y2d1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMTI2OTgsImV4cCI6MjA4ODg4ODY5OH0.B-G2ZXIv5Tj8BXjgODN2V2mQdSXTpSQms-jxz62e00k';
 
@@ -80,37 +80,37 @@ export const initCommand = new Command('init')
       const connectRemote = await prompt(rl, 'Pair with YesPaPa mobile app? (Y/n): ');
       const wantsMobile = connectRemote.trim().toLowerCase() !== 'n';
 
-      let supabaseUrl: string | undefined;
-      let supabaseKey: string | undefined;
-      let supabaseHostId: string | undefined;
-      let supabaseUserId: string | undefined;
-      let supabaseRefreshToken: string | undefined;
+      let remoteUrl: string | undefined;
+      let remoteKey: string | undefined;
+      let remoteHostId: string | undefined;
+      let remoteUserId: string | undefined;
+      let remoteRefreshToken: string | undefined;
 
       if (wantsMobile) {
         // YES path: connect to remote, display combined QR, verify TOTP
         const urlInput = await prompt(rl, `Remote server URL [${DEFAULT_REMOTE_URL}]: `);
-        supabaseUrl = urlInput.trim() || DEFAULT_REMOTE_URL;
+        remoteUrl = urlInput.trim() || DEFAULT_REMOTE_URL;
         const keyInput = await prompt(rl, `Remote server key [default]: `);
-        supabaseKey = keyInput.trim() || DEFAULT_REMOTE_KEY;
+        remoteKey = keyInput.trim() || DEFAULT_REMOTE_KEY;
 
         try {
           console.log('\n  Connecting to remote server...');
-          const supabase = initializeSupabase(supabaseUrl, supabaseKey);
+          const remote = initializeRemote(remoteUrl, remoteKey);
 
           const { userId, refreshToken } = await authenticateAnonymous();
           console.log('  ✓ Authenticated with remote server');
-          supabaseUserId = userId;
-          supabaseRefreshToken = refreshToken;
+          remoteUserId = userId;
+          remoteRefreshToken = refreshToken;
 
           const hostRecord = await registerHost(hostName, generateHostFingerprint());
           console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
-          supabaseHostId = hostRecord.id;
+          remoteHostId = hostRecord.id;
 
           // Generate combined QR (TOTP seed + pairing data in one scan)
           const pairingToken = generatePairingToken();
-          await storePairingToken(supabase, hostRecord.id, pairingToken);
+          await storePairingToken(remote, hostRecord.id, pairingToken);
           const combinedPayload = createCombinedPayload(
-            seed, hostName, supabaseUrl, supabaseKey,
+            seed, hostName, remoteUrl, remoteKey,
             hostRecord.id, pairingToken, refreshToken,
           );
           const qrStr = await generateCombinedQR(combinedPayload);
@@ -123,8 +123,8 @@ export const initCommand = new Command('init')
         } catch (err) {
           console.log(`  ✗ Remote connection failed: ${err}`);
           console.log('  Falling back to standard TOTP QR. You can configure remote later.\n');
-          supabaseUrl = undefined;
-          supabaseKey = undefined;
+          remoteUrl = undefined;
+          remoteKey = undefined;
 
           // Fall back to standard otpauth:// QR
           await displayTotpQR(seed, hostName);
@@ -201,13 +201,13 @@ export const initCommand = new Command('init')
         console.log(`  ✓ Shell interceptor injected into ${p}`);
       }
 
-      // Store Supabase config (if connected) BEFORE starting daemon
-      if (supabaseUrl && supabaseKey && supabaseHostId) {
-        setConfig(db, 'supabase_url', supabaseUrl);
-        setConfig(db, 'supabase_anon_key', supabaseKey);
-        setConfig(db, 'supabase_host_id', supabaseHostId);
-        if (supabaseUserId) setConfig(db, 'supabase_user_id', supabaseUserId);
-        if (supabaseRefreshToken) setConfig(db, 'supabase_refresh_token', supabaseRefreshToken);
+      // Store remote config (if connected) BEFORE starting daemon
+      if (remoteUrl && remoteKey && remoteHostId) {
+        setConfig(db, 'remote_url', remoteUrl);
+        setConfig(db, 'remote_key', remoteKey);
+        setConfig(db, 'remote_host_id', remoteHostId);
+        if (remoteUserId) setConfig(db, 'remote_user_id', remoteUserId);
+        if (remoteRefreshToken) setConfig(db, 'remote_refresh_token', remoteRefreshToken);
         console.log('  ✓ Remote server configured');
       }
 
@@ -215,7 +215,7 @@ export const initCommand = new Command('init')
       const passwordPath = join(YESPAPA_DIR, '.daemon_password');
       writeFileSync(passwordPath, password, { mode: 0o600 });
 
-      // Start daemon once (Supabase config already in DB, no restart needed)
+      // Start daemon once (remote config already in DB, no restart needed)
       db.close();
       const daemonScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'daemon', 'start.js');
       const child = spawn(process.execPath, [daemonScript, password], {

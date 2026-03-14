@@ -3,8 +3,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { generateQRString } from '../totp/qr.js';
 
 export interface PairingData {
-  supabase_url: string;
-  supabase_anon_key: string;
+  remote_url: string;
+  remote_key: string;
   host_id: string;
   pairing_token: string;
   refresh_token?: string;
@@ -18,8 +18,8 @@ export interface CombinedPairingData {
   type: 'yespapa';
   totp_seed: string;        // Base32
   host_name: string;
-  supabase_url: string;
-  supabase_anon_key: string;
+  remote_url: string;
+  remote_key: string;
   host_id: string;
   pairing_token: string;
   refresh_token?: string;
@@ -36,15 +36,15 @@ export function generatePairingToken(): string {
  * Create the pairing payload for QR encoding.
  */
 export function createPairingPayload(
-  supabaseUrl: string,
-  supabaseAnonKey: string,
+  remoteUrl: string,
+  remoteKey: string,
   hostId: string,
   pairingToken: string,
   refreshToken?: string,
 ): PairingData {
   return {
-    supabase_url: supabaseUrl,
-    supabase_anon_key: supabaseAnonKey,
+    remote_url: remoteUrl,
+    remote_key: remoteKey,
     host_id: hostId,
     pairing_token: pairingToken,
     refresh_token: refreshToken,
@@ -67,8 +67,8 @@ export async function generatePairingQR(payload: PairingData): Promise<string> {
 export function createCombinedPayload(
   totpSeed: string,
   hostName: string,
-  supabaseUrl: string,
-  supabaseAnonKey: string,
+  remoteUrl: string,
+  remoteKey: string,
   hostId: string,
   pairingToken: string,
   refreshToken?: string,
@@ -77,8 +77,8 @@ export function createCombinedPayload(
     type: 'yespapa',
     totp_seed: totpSeed,
     host_name: hostName,
-    supabase_url: supabaseUrl,
-    supabase_anon_key: supabaseAnonKey,
+    remote_url: remoteUrl,
+    remote_key: remoteKey,
     host_id: hostId,
     pairing_token: pairingToken,
     refresh_token: refreshToken,
@@ -94,18 +94,15 @@ export async function generateCombinedQR(payload: CombinedPairingData): Promise<
 }
 
 /**
- * Store the pairing token in Supabase hosts table for validation.
+ * Store the pairing token in the remote hosts table for validation.
  * The mobile app will present this token when pairing.
  */
 export async function storePairingToken(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   hostId: string,
   pairingToken: string,
 ): Promise<void> {
-  // Store the pairing token temporarily — it will be cleared after use
-  // We use a metadata column or a separate pairing_tokens approach
-  // For MVP, we store it as push_token temporarily (will be replaced by real push token)
-  const { error } = await supabase
+  const { error } = await remote
     .from('hosts')
     .update({ push_token: `pairing:${pairingToken}` })
     .eq('id', hostId);
@@ -120,11 +117,11 @@ export async function storePairingToken(
  * Returns true if the token matches, and clears it (one-time use).
  */
 export async function consumePairingToken(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   hostId: string,
   token: string,
 ): Promise<boolean> {
-  const { data, error } = await supabase
+  const { data, error } = await remote
     .from('hosts')
     .select('push_token')
     .eq('id', hostId)
@@ -135,8 +132,7 @@ export async function consumePairingToken(
   const storedToken = data.push_token as string | null;
   if (storedToken !== `pairing:${token}`) return false;
 
-  // Clear the pairing token (consumed)
-  await supabase
+  await remote
     .from('hosts')
     .update({ push_token: null })
     .eq('id', hostId);

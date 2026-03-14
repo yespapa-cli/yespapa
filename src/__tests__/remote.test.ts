@@ -1,14 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
-  initializeSupabase,
-  resetSupabaseClient,
-  getSupabaseClient,
+  initializeRemote,
+  resetRemoteClient,
+  getRemoteClient,
   generateHostFingerprint,
   authenticateAnonymous,
   registerHost,
   updateHeartbeat,
   getHostByFingerprint,
-} from '../supabase/index.js';
+} from '../remote/index.js';
 
 // Mock @supabase/supabase-js
 vi.mock('@supabase/supabase-js', () => {
@@ -25,34 +25,34 @@ vi.mock('@supabase/supabase-js', () => {
   };
 });
 
-describe('supabase client module', () => {
+describe('remote client module', () => {
   beforeEach(() => {
-    resetSupabaseClient();
+    resetRemoteClient();
   });
 
-  describe('initializeSupabase', () => {
+  describe('initializeRemote', () => {
     it('creates a client with the given URL and key', () => {
-      const client = initializeSupabase('https://test.supabase.co', 'test-anon-key');
+      const client = initializeRemote('https://test.supabase.co', 'test-anon-key');
       expect(client).toBeDefined();
       expect(client.from).toBeDefined();
       expect(client.auth).toBeDefined();
     });
 
     it('returns the same client on repeated calls', () => {
-      const client1 = initializeSupabase('https://test.supabase.co', 'key1');
-      const client2 = initializeSupabase('https://test.supabase.co', 'key2');
+      const client1 = initializeRemote('https://test.supabase.co', 'key1');
+      const client2 = initializeRemote('https://test.supabase.co', 'key2');
       expect(client1).toBe(client2);
     });
   });
 
-  describe('getSupabaseClient', () => {
+  describe('getRemoteClient', () => {
     it('throws if not initialized', () => {
-      expect(() => getSupabaseClient()).toThrow('Supabase client not initialized');
+      expect(() => getRemoteClient()).toThrow('Remote client not initialized');
     });
 
     it('returns client after initialization', () => {
-      initializeSupabase('https://test.supabase.co', 'key');
-      expect(() => getSupabaseClient()).not.toThrow();
+      initializeRemote('https://test.supabase.co', 'key');
+      expect(() => getRemoteClient()).not.toThrow();
     });
   });
 
@@ -71,7 +71,7 @@ describe('supabase client module', () => {
 
   describe('authenticateAnonymous', () => {
     it('returns userId and accessToken on success', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       (client.auth.signInAnonymously as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: {
           user: { id: 'user-123' },
@@ -86,7 +86,7 @@ describe('supabase client module', () => {
     });
 
     it('throws on auth error', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       (client.auth.signInAnonymously as ReturnType<typeof vi.fn>).mockResolvedValue({
         data: { user: null, session: null },
         error: { message: 'Auth disabled' },
@@ -98,7 +98,7 @@ describe('supabase client module', () => {
 
   describe('registerHost', () => {
     it('inserts a new host if fingerprint not found', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       const mockHost = {
         id: 'host-uuid',
         user_id: 'user-123',
@@ -126,7 +126,7 @@ describe('supabase client module', () => {
     });
 
     it('updates existing host if owned by current user', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       const existingHost = {
         id: 'host-uuid',
         user_id: 'user-123',
@@ -158,7 +158,7 @@ describe('supabase client module', () => {
 
   describe('updateHeartbeat', () => {
     it('updates last_seen_at for the host', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       const updateFn = vi.fn().mockReturnValue({
         eq: vi.fn().mockResolvedValue({ error: null }),
       });
@@ -170,7 +170,7 @@ describe('supabase client module', () => {
     });
 
     it('throws on error', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       (client.from as ReturnType<typeof vi.fn>).mockReturnValue({
         update: vi.fn().mockReturnValue({
           eq: vi.fn().mockResolvedValue({ error: { message: 'Not found' } }),
@@ -183,7 +183,7 @@ describe('supabase client module', () => {
 
   describe('getHostByFingerprint', () => {
     it('returns host record when found', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       const mockHost = {
         id: 'host-uuid',
         host_name: 'my-macbook',
@@ -203,7 +203,7 @@ describe('supabase client module', () => {
     });
 
     it('returns null when not found', async () => {
-      const client = initializeSupabase('https://test.supabase.co', 'key');
+      const client = initializeRemote('https://test.supabase.co', 'key');
       (client.from as ReturnType<typeof vi.fn>).mockReturnValue({
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({

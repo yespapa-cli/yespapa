@@ -7,7 +7,7 @@ import { openDatabase, getConfig, getActiveGracePeriods, createGracePeriod, revo
 import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
 import { createGraceToken, getGraceRemaining, DURATION_1H, DURATION_24H, DURATION_7D } from '../crypto/grace.js';
-import { initializeSupabase } from '../supabase/index.js';
+import { initializeRemote } from '../remote/index.js';
 
 const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
 
@@ -90,18 +90,18 @@ const activateCommand = new Command('activate')
       // Store locally
       createGracePeriod(db, token.id, token.scope, token.expires_at, token.hmac_signature);
 
-      // Sync to Supabase if configured
-      const supabaseUrl = getConfig(db, 'supabase_url');
-      const supabaseAnonKey = getConfig(db, 'supabase_anon_key');
-      const supabaseHostId = getConfig(db, 'supabase_host_id');
+      // Sync to remote if configured
+      const remoteUrl = getConfig(db, 'remote_url');
+      const remoteKey = getConfig(db, 'remote_key');
+      const remoteHostId = getConfig(db, 'remote_host_id');
 
-      if (supabaseUrl && supabaseAnonKey && supabaseHostId) {
+      if (remoteUrl && remoteKey && remoteHostId) {
         try {
-          const supabase = initializeSupabase(supabaseUrl, supabaseAnonKey);
-          await supabase.auth.signInAnonymously();
-          await supabase.from('grace_periods').insert({
+          const remote = initializeRemote(remoteUrl, remoteKey);
+          await remote.auth.signInAnonymously();
+          await remote.from('grace_periods').insert({
             id: token.id,
-            host_id: supabaseHostId,
+            host_id: remoteHostId,
             scope: token.scope,
             expires_at: token.expires_at,
             hmac_signature: token.hmac_signature,
@@ -192,9 +192,9 @@ const revokeCommand = new Command('revoke')
         }
       }
 
-      const supabaseUrl = getConfig(db, 'supabase_url');
-      const supabaseAnonKey = getConfig(db, 'supabase_anon_key');
-      const supabaseHostId = getConfig(db, 'supabase_host_id');
+      const remoteUrl = getConfig(db, 'remote_url');
+      const remoteKey = getConfig(db, 'remote_key');
+      const remoteHostId = getConfig(db, 'remote_host_id');
 
       const toRevoke = options.id
         ? active.filter((gp) => gp.id === options.id)
@@ -208,12 +208,12 @@ const revokeCommand = new Command('revoke')
       for (const gp of toRevoke) {
         revokeGracePeriod(db, gp.id);
 
-        // Sync revocation to Supabase
-        if (supabaseUrl && supabaseAnonKey && supabaseHostId) {
+        // Sync revocation to remote
+        if (remoteUrl && remoteKey && remoteHostId) {
           try {
-            const supabase = initializeSupabase(supabaseUrl, supabaseAnonKey);
-            await supabase.auth.signInAnonymously();
-            await supabase.from('grace_periods')
+            const remote = initializeRemote(remoteUrl, remoteKey);
+            await remote.auth.signInAnonymously();
+            await remote.from('grace_periods')
               .update({ expires_at: new Date().toISOString() })
               .eq('id', gp.id);
           } catch { /* ignore sync failure */ }

@@ -3,8 +3,8 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { openDatabase, getConfig } from '../db/index.js';
-import { initializeSupabase, restoreSession, authenticateAnonymous } from '../supabase/index.js';
-import { pushCommand } from '../supabase/sync.js';
+import { initializeRemote, restoreSession, authenticateAnonymous } from '../remote/index.js';
+import { pushCommand } from '../remote/sync.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -19,12 +19,12 @@ export const testCommand = new Command('test')
 
     const db = openDatabase(DB_PATH);
 
-    const supabaseUrl = getConfig(db, 'supabase_url');
-    const supabaseAnonKey = getConfig(db, 'supabase_anon_key');
-    const supabaseHostId = getConfig(db, 'supabase_host_id');
-    const refreshToken = getConfig(db, 'supabase_refresh_token');
+    const remoteUrl = getConfig(db, 'remote_url');
+    const remoteKey = getConfig(db, 'remote_key');
+    const remoteHostId = getConfig(db, 'remote_host_id');
+    const refreshToken = getConfig(db, 'remote_refresh_token');
 
-    if (!supabaseUrl || !supabaseAnonKey || !supabaseHostId) {
+    if (!remoteUrl || !remoteKey || !remoteHostId) {
       console.log('Remote server not configured. Run "yespapa init" with mobile app pairing.');
       db.close();
       process.exit(1);
@@ -32,7 +32,7 @@ export const testCommand = new Command('test')
 
     console.log('\n  YesPaPa Connectivity Test\n');
     console.log('  1. Connecting to remote server...');
-    const supabase = initializeSupabase(supabaseUrl, supabaseAnonKey);
+    const remote = initializeRemote(remoteUrl, remoteKey);
 
     // Authenticate
     console.log('  2. Authenticating...');
@@ -51,10 +51,10 @@ export const testCommand = new Command('test')
 
     // Check host exists
     console.log('  3. Checking host record...');
-    const { data: host, error: hostErr } = await supabase
+    const { data: host, error: hostErr } = await remote
       .from('hosts')
       .select('id, host_name, push_token')
-      .eq('id', supabaseHostId)
+      .eq('id', remoteHostId)
       .single();
 
     if (hostErr || !host) {
@@ -69,7 +69,7 @@ export const testCommand = new Command('test')
     const testId = `cmd_test_${Date.now().toString(36)}`;
     console.log('  4. Sending test command...');
     try {
-      await pushCommand(supabase, supabaseHostId, testId, 'echo "YesPaPa test — approve or deny this from your phone"', 'Dry-run test to verify mobile app connectivity');
+      await pushCommand(remote, remoteHostId, testId, 'echo "YesPaPa test — approve or deny this from your phone"', 'Dry-run test to verify mobile app connectivity');
       console.log('     ✓ Command inserted into remote server');
     } catch (err) {
       console.log(`     ✗ Failed: ${(err as Error).message}`);
@@ -78,7 +78,7 @@ export const testCommand = new Command('test')
     }
 
     // Verify it's readable
-    const { data: cmd, error: cmdErr } = await supabase
+    const { data: cmd, error: cmdErr } = await remote
       .from('commands')
       .select('*')
       .eq('id', testId)
@@ -101,7 +101,7 @@ export const testCommand = new Command('test')
     // Wait for resolution
     console.log('  Waiting for your response (Ctrl+C to stop)...\n');
     const poll = setInterval(async () => {
-      const { data: updated } = await supabase
+      const { data: updated } = await remote
         .from('commands')
         .select('status, message, totp_code')
         .eq('id', testId)
@@ -118,7 +118,7 @@ export const testCommand = new Command('test')
         }
 
         // Clean up test command
-        await supabase.from('commands').delete().eq('id', testId);
+        await remote.from('commands').delete().eq('id', testId);
         db.close();
         process.exit(0);
       }

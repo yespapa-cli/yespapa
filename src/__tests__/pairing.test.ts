@@ -5,7 +5,7 @@ import {
   generatePairingQR,
   createCombinedPayload,
   generateCombinedQR,
-} from '../supabase/pairing.js';
+} from '../remote/pairing.js';
 
 describe('pairing module', () => {
   describe('generatePairingToken', () => {
@@ -29,8 +29,8 @@ describe('pairing module', () => {
         'host-uuid',
         'token-abc',
       );
-      expect(payload.supabase_url).toBe('https://test.supabase.co');
-      expect(payload.supabase_anon_key).toBe('anon-key-123');
+      expect(payload.remote_url).toBe('https://test.supabase.co');
+      expect(payload.remote_key).toBe('anon-key-123');
       expect(payload.host_id).toBe('host-uuid');
       expect(payload.pairing_token).toBe('token-abc');
     });
@@ -66,8 +66,8 @@ describe('pairing module', () => {
       expect(payload.type).toBe('yespapa');
       expect(payload.totp_seed).toBe('JBSWY3DPEHPK3PXP');
       expect(payload.host_name).toBe('my-host');
-      expect(payload.supabase_url).toBe('https://test.supabase.co');
-      expect(payload.supabase_anon_key).toBe('anon-key-123');
+      expect(payload.remote_url).toBe('https://test.supabase.co');
+      expect(payload.remote_key).toBe('anon-key-123');
       expect(payload.host_id).toBe('host-uuid');
       expect(payload.pairing_token).toBe('token-abc');
       expect(payload.refresh_token).toBe('refresh-token-xyz');

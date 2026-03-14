@@ -2,7 +2,7 @@ import type { SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { setRemoteResolution, type TotpValidator } from '../daemon/socket.js';
 
 export interface SyncConfig {
-  supabase: SupabaseClient;
+  client: SupabaseClient;
   hostId: string;
   validateTotp: TotpValidator;
   onCommandResolved?: (commandId: string, status: string, message?: string) => void;
@@ -21,7 +21,6 @@ let drainTimer: ReturnType<typeof setTimeout> | null = null;
 
 function isRateLimited(): boolean {
   const now = Date.now();
-  // Remove timestamps outside the window
   while (pushTimestamps.length > 0 && pushTimestamps[0] < now - RATE_LIMIT_WINDOW_MS) {
     pushTimestamps.shift();
   }
@@ -32,7 +31,6 @@ function drainQueue(): void {
   if (drainTimer) return;
   if (pushQueue.length === 0) return;
   if (isRateLimited()) {
-    // Try again after the oldest entry expires
     const waitMs = pushTimestamps[0] + RATE_LIMIT_WINDOW_MS - Date.now() + 100;
     drainTimer = setTimeout(() => {
       drainTimer = null;
@@ -48,17 +46,17 @@ function drainQueue(): void {
 }
 
 /** Number of active Realtime channels. */
-export function getChannelCount(supabase: SupabaseClient): number {
-  return supabase.getChannels().length;
+export function getChannelCount(remote: SupabaseClient): number {
+  return remote.getChannels().length;
 }
 
 /**
- * Push a pending command to the Supabase `commands` table,
+ * Push a pending command to the remote `commands` table,
  * then invoke the push_notification Edge Function directly.
  * Rate-limited to max 10 commands/minute per host — excess is queued.
  */
 export async function pushCommand(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   hostId: string,
   commandId: string,
   commandDisplay: string,
@@ -75,14 +73,14 @@ export async function pushCommand(
       timeout_seconds: timeoutSeconds ?? 0,
     };
 
-    const { error } = await supabase.from('commands').insert(record);
+    const { error } = await remote.from('commands').insert(record);
 
     if (error) {
-      throw new Error(`Supabase insert failed: ${error.message} (code: ${error.code})`);
+      throw new Error(`Remote insert failed: ${error.message} (code: ${error.code})`);
     }
 
     // Fire push notification via Edge Function (non-blocking, best-effort)
-    sendPushNotification(supabase, record).catch((err) => {
+    sendPushNotification(remote, record).catch((err) => {
       syncLog?.(`Push notification error: ${err}`);
     });
   };
@@ -100,13 +98,12 @@ export async function pushCommand(
 
 /**
  * Call the push_notification Edge Function directly.
- * This avoids needing a database webhook trigger.
  */
 async function sendPushNotification(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   record: { id: string; host_id: string; command_display: string; justification: string | null },
 ): Promise<void> {
-  const { data, error } = await supabase.functions.invoke('push_notification', {
+  const { data, error } = await remote.functions.invoke('push_notification', {
     body: { type: 'INSERT', table: 'commands', record },
   });
 
@@ -123,16 +120,15 @@ async function sendPushNotification(
  * and set the remote resolution so the poll-check handler can pick it up.
  */
 export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
-  const { supabase, hostId, validateTotp, onCommandResolved, log } = config;
+  const { client: remote, hostId, validateTotp, onCommandResolved, log } = config;
   syncLog = log;
 
-  // Unsubscribe from previous channel if any
   if (channel) {
-    supabase.removeChannel(channel);
+    remote.removeChannel(channel);
     channel = null;
   }
 
-  channel = supabase
+  channel = remote
     .channel(`commands:host_id=eq.${hostId}`)
     .on(
       'postgres_changes',
@@ -152,7 +148,6 @@ export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
         syncLog?.(`Realtime UPDATE received: ${commandId} → ${status}`);
 
         if (status === 'approved') {
-          // Validate TOTP — the app must have sent a valid code
           if (!totpCode || !validateTotp(totpCode)) {
             syncLog?.(`Ignoring remote approval for ${commandId}: invalid TOTP (code=${totpCode ? 'present' : 'missing'})`);
             return;
@@ -184,11 +179,11 @@ export function subscribeToApprovals(config: SyncConfig): RealtimeChannel {
  * Subscribe to Realtime updates on the `grace_periods` table for this host.
  */
 export function subscribeToGracePeriods(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   hostId: string,
   onGracePeriod?: (data: Record<string, unknown>) => void,
 ): RealtimeChannel {
-  return supabase
+  return remote
     .channel(`grace_periods:host_id=eq.${hostId}`)
     .on(
       'postgres_changes',
@@ -213,16 +208,15 @@ export function subscribeToHostChannel(
   config: SyncConfig,
   onGracePeriod?: (data: Record<string, unknown>) => void,
 ): RealtimeChannel {
-  const { supabase, hostId, validateTotp, onCommandResolved, log } = config;
+  const { client: remote, hostId, validateTotp, onCommandResolved, log } = config;
   syncLog = log;
 
-  // Unsubscribe from previous channel if any
   if (channel) {
-    supabase.removeChannel(channel);
+    remote.removeChannel(channel);
     channel = null;
   }
 
-  channel = supabase
+  channel = remote
     .channel(`host:${hostId}`)
     .on(
       'postgres_changes',
@@ -274,15 +268,15 @@ export function subscribeToHostChannel(
 }
 
 /**
- * Update a command's status in Supabase (for syncing locally-resolved commands).
+ * Update a command's status on the remote server (for syncing locally-resolved commands).
  */
 export async function syncCommandResolution(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   commandId: string,
   status: string,
   approvalSource?: string,
 ): Promise<void> {
-  const { error } = await supabase
+  const { error } = await remote
     .from('commands')
     .update({
       status,
@@ -291,21 +285,21 @@ export async function syncCommandResolution(
     .eq('id', commandId);
 
   if (error) {
-    console.error(`[YesPaPa] Failed to sync command resolution to Supabase: ${error.message}`);
+    console.error(`[YesPaPa] Failed to sync command resolution to remote: ${error.message}`);
   }
 }
 
 /**
- * Fetch all grace periods for this host from Supabase and sync to local DB.
+ * Fetch all grace periods for this host from remote and sync to local DB.
  * Catches up on any missed Realtime events (e.g. revocations during disconnection).
  */
 export async function fetchGracePeriods(
-  supabase: SupabaseClient,
+  remote: SupabaseClient,
   hostId: string,
   onGracePeriod?: (data: Record<string, unknown>) => void,
   log?: (msg: string) => void,
 ): Promise<void> {
-  const { data, error } = await supabase
+  const { data, error } = await remote
     .from('grace_periods')
     .select('*')
     .eq('host_id', hostId);
@@ -326,7 +320,7 @@ export async function fetchGracePeriods(
 /**
  * Unsubscribe from all channels.
  */
-export function unsubscribeAll(supabase: SupabaseClient): void {
-  supabase.removeAllChannels();
+export function unsubscribeAll(remote: SupabaseClient): void {
+  remote.removeAllChannels();
   channel = null;
 }

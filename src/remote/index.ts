@@ -3,13 +3,13 @@ import { createHash } from 'node:crypto';
 import { hostname, userInfo, platform } from 'node:os';
 import WebSocket from 'ws';
 
-// Polyfill WebSocket for Node.js — required by Supabase Realtime
+// Polyfill WebSocket for Node.js — required by the Realtime client
 if (typeof globalThis.WebSocket === 'undefined') {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (globalThis as any).WebSocket = WebSocket;
 }
 
-export interface SupabaseConfig {
+export interface RemoteConfig {
   url: string;
   anonKey: string;
 }
@@ -27,10 +27,10 @@ export interface HostRecord {
 let client: SupabaseClient | null = null;
 
 /**
- * Initialize the Supabase client. Returns the client instance.
+ * Initialize the remote client. Returns the client instance.
  * Reuses existing client if already initialized with same URL.
  */
-export function initializeSupabase(url: string, anonKey: string): SupabaseClient {
+export function initializeRemote(url: string, anonKey: string): SupabaseClient {
   if (client) return client;
   client = createClient(url, anonKey, {
     auth: {
@@ -42,11 +42,11 @@ export function initializeSupabase(url: string, anonKey: string): SupabaseClient
 }
 
 /**
- * Get the current Supabase client. Throws if not initialized.
+ * Get the current remote client. Throws if not initialized.
  */
-export function getSupabaseClient(): SupabaseClient {
+export function getRemoteClient(): SupabaseClient {
   if (!client) {
-    throw new Error('Supabase client not initialized. Call initializeSupabase() first.');
+    throw new Error('Remote client not initialized. Call initializeRemote() first.');
   }
   return client;
 }
@@ -54,17 +54,17 @@ export function getSupabaseClient(): SupabaseClient {
 /**
  * Reset the client (for testing).
  */
-export function resetSupabaseClient(): void {
+export function resetRemoteClient(): void {
   client = null;
 }
 
 /**
- * Authenticate anonymously with Supabase.
+ * Authenticate anonymously with the remote server.
  * Returns the anonymous user session.
  */
 export async function authenticateAnonymous(): Promise<{ userId: string; accessToken: string; refreshToken: string }> {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase.auth.signInAnonymously();
+  const remote = getRemoteClient();
+  const { data, error } = await remote.auth.signInAnonymously();
   if (error) {
     throw new Error(`Anonymous auth failed: ${error.message}`);
   }
@@ -83,8 +83,8 @@ export async function authenticateAnonymous(): Promise<{ userId: string; accessT
  * This allows the daemon to authenticate as the same user across restarts.
  */
 export async function restoreSession(refreshToken: string): Promise<{ userId: string; accessToken: string }> {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });
+  const remote = getRemoteClient();
+  const { data, error } = await remote.auth.refreshSession({ refresh_token: refreshToken });
   if (error) {
     throw new Error(`Session restore failed: ${error.message}`);
   }
@@ -107,18 +107,18 @@ export function generateHostFingerprint(): string {
 }
 
 /**
- * Register a host in the Supabase `hosts` table.
+ * Register a host in the remote `hosts` table.
  * If a host with the same fingerprint exists, returns the existing record.
  */
 export async function registerHost(
   hostName: string,
   fingerprint?: string,
 ): Promise<HostRecord> {
-  const supabase = getSupabaseClient();
+  const remote = getRemoteClient();
   const fp = fingerprint ?? generateHostFingerprint();
 
   // Try to find an existing host owned by the current user
-  const { data: ownedHosts } = await supabase
+  const { data: ownedHosts } = await remote
     .from('hosts')
     .select('*')
     .eq('host_fingerprint', fp);
@@ -127,7 +127,7 @@ export async function registerHost(
   if (ownedHosts && ownedHosts.length > 0) {
     // Try updating the first one — will succeed only if we own it (RLS)
     const candidate = ownedHosts[0];
-    const { data: updated, error: updateError } = await supabase
+    const { data: updated, error: updateError } = await remote
       .from('hosts')
       .update({ host_name: hostName, last_seen_at: new Date().toISOString() })
       .eq('id', candidate.id)
@@ -141,14 +141,12 @@ export async function registerHost(
   }
 
   // Insert new host for the current user (new fingerprint or different owner)
-  // Use a unique fingerprint suffix if the base fingerprint is taken by another user
   let insertFp = fp;
   if (ownedHosts && ownedHosts.length > 0) {
-    // Fingerprint exists but owned by another user — append timestamp to make unique
     insertFp = `${fp}:${Date.now()}`;
   }
 
-  const { data: inserted, error: insertError } = await supabase
+  const { data: inserted, error: insertError } = await remote
     .from('hosts')
     .insert({
       host_name: hostName,
@@ -168,8 +166,8 @@ export async function registerHost(
  * Update the host heartbeat timestamp.
  */
 export async function updateHeartbeat(hostId: string): Promise<void> {
-  const supabase = getSupabaseClient();
-  const { error } = await supabase
+  const remote = getRemoteClient();
+  const { error } = await remote
     .from('hosts')
     .update({ last_seen_at: new Date().toISOString() })
     .eq('id', hostId);
@@ -183,8 +181,8 @@ export async function updateHeartbeat(hostId: string): Promise<void> {
  * Get a host by its fingerprint.
  */
 export async function getHostByFingerprint(fingerprint: string): Promise<HostRecord | null> {
-  const supabase = getSupabaseClient();
-  const { data, error } = await supabase
+  const remote = getRemoteClient();
+  const { data, error } = await remote
     .from('hosts')
     .select('*')
     .eq('host_fingerprint', fingerprint)

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createReconnectManager, type ConnectionState } from '../supabase/reconnect.js';
+import { createReconnectManager, type ConnectionState } from '../remote/reconnect.js';
 
 // Mock the sync module
-vi.mock('../supabase/sync.js', () => ({
+vi.mock('../remote/sync.js', () => ({
   subscribeToHostChannel: vi.fn().mockReturnValue({
     on: vi.fn().mockReturnThis(),
     subscribe: vi.fn().mockReturnThis(),
@@ -11,7 +11,7 @@ vi.mock('../supabase/sync.js', () => ({
   getChannelCount: vi.fn().mockReturnValue(1),
 }));
 
-function createMockSupabase() {
+function createMockRemote() {
   return {
     channel: vi.fn().mockReturnValue({
       on: vi.fn().mockReturnThis(),
@@ -24,14 +24,14 @@ function createMockSupabase() {
 
 describe('reconnect manager', () => {
   it('starts in disconnected state', () => {
-    const mgr = createReconnectManager(createMockSupabase(), 'host-1', () => false);
+    const mgr = createReconnectManager(createMockRemote(), 'host-1', () => false);
     expect(mgr.getState()).toBe('disconnected');
   });
 
   it('transitions to connected on connect', () => {
     const states: ConnectionState[] = [];
     const mgr = createReconnectManager(
-      createMockSupabase(),
+      createMockRemote(),
       'host-1',
       () => false,
       (s) => states.push(s),
@@ -41,17 +41,17 @@ describe('reconnect manager', () => {
   });
 
   it('transitions to disconnected on disconnect', () => {
-    const supabase = createMockSupabase();
-    const mgr = createReconnectManager(supabase, 'host-1', () => false);
+    const remote = createMockRemote();
+    const mgr = createReconnectManager(remote, 'host-1', () => false);
     mgr.connect();
     mgr.disconnect();
     expect(mgr.getState()).toBe('disconnected');
-    expect(supabase.removeAllChannels).toHaveBeenCalled();
+    expect(remote.removeAllChannels).toHaveBeenCalled();
   });
 
   it('calls onStateChange callback', () => {
     const callback = vi.fn();
-    const mgr = createReconnectManager(createMockSupabase(), 'host-1', () => false, callback);
+    const mgr = createReconnectManager(createMockRemote(), 'host-1', () => false, callback);
     mgr.connect();
     expect(callback).toHaveBeenCalledWith('connected');
     mgr.disconnect();

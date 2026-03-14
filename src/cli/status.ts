@@ -32,12 +32,12 @@ export const statusCommand = new Command('status')
     console.log(`  Daemon:        ${daemonRunning ? '✓ running' : '✗ stopped'} (PID: ${daemonPid ?? 'none'})`);
     console.log(`  Socket:        ${socketExists ? '✓ active' : '✗ not found'} (${SOCKET_PATH})`);
     console.log(`  Interceptor:   ${interceptorInstalled ? '✓ installed' : '✗ not installed'}`);
-    const supabaseUrl = getConfig(db, 'supabase_url');
-    const supabaseHostId = getConfig(db, 'supabase_host_id');
+    const remoteUrl = getConfig(db, 'remote_url');
+    const remoteHostId = getConfig(db, 'remote_host_id');
     const channelCount = getConfig(db, 'realtime_channels');
-    if (supabaseUrl && supabaseHostId) {
+    if (remoteUrl && remoteHostId) {
       const channelInfo = channelCount ? `, ${channelCount} channel(s)` : '';
-      console.log(`  Remote:        ✓ configured (host: ${supabaseHostId}${channelInfo})`);
+      console.log(`  Remote:        ✓ configured (host: ${remoteHostId}${channelInfo})`);
     } else {
       console.log(`  Remote:        offline (not configured)`);
     }

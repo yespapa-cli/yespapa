@@ -17,9 +17,9 @@ import type { GraceMatch } from './socket.js';
 import { startDaemonServer, SOCKET_PATH } from './socket.js';
 import { startHeartbeat } from './heartbeat.js';
 import { appendFileSync, statSync, renameSync, existsSync as fsExists, unlinkSync } from 'node:fs';
-import { initializeSupabase } from '../supabase/index.js';
-import { pushCommand, syncCommandResolution, subscribeToApprovals, fetchGracePeriods } from '../supabase/sync.js';
-import { createReconnectManager } from '../supabase/reconnect.js';
+import { initializeRemote } from '../remote/index.js';
+import { pushCommand, syncCommandResolution, subscribeToApprovals, fetchGracePeriods } from '../remote/sync.js';
+import { createReconnectManager } from '../remote/reconnect.js';
 import { injectInterceptor } from '../shell/interceptor.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
@@ -104,31 +104,31 @@ async function main(): Promise<void> {
       return null;
     };
 
-    // Connect to Supabase if configured
-    const supabaseUrl = getConfig(db, 'supabase_url');
-    const supabaseAnonKey = getConfig(db, 'supabase_anon_key');
-    const supabaseHostId = getConfig(db, 'supabase_host_id');
+    // Connect to remote if configured
+    const remoteUrl = getConfig(db, 'remote_url');
+    const remoteKey = getConfig(db, 'remote_key');
+    const remoteHostId = getConfig(db, 'remote_host_id');
 
     let onCommandPending: ((id: string, cmd: string, justification?: string) => void) | undefined;
     let onCommandResolved: ((id: string, status: string, source?: string) => void) | undefined;
 
-    if (supabaseUrl && supabaseAnonKey && supabaseHostId) {
+    if (remoteUrl && remoteKey && remoteHostId) {
       try {
-        const supabase = initializeSupabase(supabaseUrl, supabaseAnonKey);
+        const remote = initializeRemote(remoteUrl, remoteKey);
 
         // Restore session — required for RLS policies to match user_id
-        const refreshToken = getConfig(db, 'supabase_refresh_token');
+        const refreshToken = getConfig(db, 'remote_refresh_token');
         if (refreshToken) {
-          const { restoreSession } = await import('../supabase/index.js');
+          const { restoreSession } = await import('../remote/index.js');
           try {
             await restoreSession(refreshToken);
             log('Remote session restored successfully');
           } catch (authErr) {
             // Refresh token expired — try fresh anonymous auth as fallback
             log(`Session restore failed (${authErr}), trying fresh auth...`);
-            const { authenticateAnonymous } = await import('../supabase/index.js');
+            const { authenticateAnonymous } = await import('../remote/index.js');
             const { refreshToken: newToken } = await authenticateAnonymous();
-            setConfig(db, 'supabase_refresh_token', newToken);
+            setConfig(db, 'remote_refresh_token', newToken);
             log('Remote authenticated with new session (WARNING: user_id may have changed)');
           }
         } else {
@@ -136,8 +136,8 @@ async function main(): Promise<void> {
         }
 
         const reconnector = createReconnectManager(
-          supabase,
-          supabaseHostId,
+          remote,
+          remoteHostId,
           totpValidator,
           (state) => log(`Remote connection: ${state}`),
           (cmdId, status, message) => {
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
           (msg) => log(`[sync] ${msg}`),
         );
         reconnector.connect();
-        log(`Remote server connected (host: ${supabaseHostId})`);
+        log(`Remote server connected (host: ${remoteHostId})`);
 
         // Periodic grace period sync to catch missed Realtime events (e.g. revocations)
         const GRACE_POLL_INTERVAL = 30_000; // 30s
@@ -183,19 +183,19 @@ async function main(): Promise<void> {
           upsertGracePeriod(db, id, scope, expiresAt, hmac);
         };
         setInterval(() => {
-          fetchGracePeriods(supabase, supabaseHostId, gracePollHandler).catch(() => {});
+          fetchGracePeriods(remote, remoteHostId, gracePollHandler).catch(() => {});
         }, GRACE_POLL_INTERVAL);
 
-        // Push pending commands to Supabase
+        // Push pending commands to remote
         onCommandPending = (cmdId, cmd, justification) => {
-          pushCommand(supabase, supabaseHostId, cmdId, cmd, justification).catch((err) => {
+          pushCommand(remote, remoteHostId, cmdId, cmd, justification).catch((err) => {
             log(`Failed to push command to remote: ${err}`);
           });
         };
 
-        // Sync locally-resolved commands to Supabase
+        // Sync locally-resolved commands to remote
         onCommandResolved = (cmdId, status, source) => {
-          syncCommandResolution(supabase, cmdId, status, source).catch((err) => {
+          syncCommandResolution(remote, cmdId, status, source).catch((err) => {
             log(`Failed to sync resolution to remote: ${err}`);
           });
         };
@@ -213,7 +213,7 @@ async function main(): Promise<void> {
       passwordValidator = (input: string) => verifyPassword(input, passwordHash);
     }
 
-    // Start socket server (with optional Supabase hooks)
+    // Start socket server (with optional remote hooks)
     await startDaemonServer(db, totpValidator, graceChecker, SOCKET_PATH, onCommandPending, onCommandResolved, passwordValidator);
     log(`Daemon started (PID: ${process.pid}, socket: ${SOCKET_PATH})`);
 
