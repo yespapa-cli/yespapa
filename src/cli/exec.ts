@@ -3,7 +3,10 @@ import { createInterface } from 'node:readline';
 import { createConnection } from 'node:net';
 import { existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { SOCKET_PATH } from '../daemon/socket.js';
+import { openDatabase, getConfig } from '../db/index.js';
 
 function sendToDaemon(msg: Record<string, unknown>): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
@@ -43,6 +46,20 @@ export const execCommand = new Command('exec')
   .option('--timeout <seconds>', 'Timeout in seconds (0 = wait forever)', '0')
   .argument('<command...>', 'The command to execute (use -- before command)')
   .action(async (args: string[], options) => {
+    // Check if remote exec is enabled
+    const dbPath = join(homedir(), '.yespapa', 'yespapa.db');
+    if (existsSync(dbPath)) {
+      const db = openDatabase(dbPath);
+      const allowed = getConfig(db, 'allow_remote_exec');
+      db.close();
+      if (allowed !== 'true') {
+        const json = { event: 'denied', reason: 'remote_exec_disabled', hint: 'Enable with: yespapa config set allow_remote_exec true' };
+        process.stderr.write('Remote execution is disabled. Enable it with:\n  yespapa config set allow_remote_exec true\n');
+        process.stderr.write(JSON.stringify(json) + '\n');
+        process.exit(1);
+      }
+    }
+
     if (!existsSync(SOCKET_PATH)) {
       const json = { event: 'denied', reason: 'Daemon not running' };
       process.stderr.write(JSON.stringify(json) + '\n');
