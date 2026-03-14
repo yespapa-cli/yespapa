@@ -20,6 +20,7 @@ export interface CommandResponse {
   id: string;
   command: string;
   rule?: string;
+  timeout?: number;
 }
 
 /**
@@ -248,11 +249,17 @@ function handleMessage(
   createCommand(db, commandId, cmdStr, justification);
   pendingCommands.set(commandId, { command: cmdStr, bundle });
   onCommandPending?.(commandId, cmdStr, justification);
+
+  // Read default_timeout from config (0 = wait forever, default 120s)
+  const timeoutConfig = getConfig(db, 'default_timeout');
+  const timeout = timeoutConfig ? parseInt(timeoutConfig, 10) : 120;
+
   sendResponse(socket, {
     status: 'needs_totp',
     id: commandId,
     command: cmdStr,
     rule: evalResult.rule?.reason ?? undefined,
+    timeout,
   });
 }
 

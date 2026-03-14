@@ -74,6 +74,7 @@ describe('daemon socket server (two-phase protocol)', () => {
     expect(response.status).toBe('needs_totp');
     expect(response.id).toMatch(/^cmd_/);
     expect(response.rule).toBeDefined();
+    expect(response.timeout).toBe(120); // default timeout
   });
 
   it('approves after valid TOTP submission', async () => {

@@ -134,10 +134,23 @@ _yp_intercept_inner() {
   echo "" >&9
 
   local attempts=0
-  local max_polls=180  # 180 polls × 1s = 3 min max wait
+  local yp_timeout
+  yp_timeout=$(yespapa_json_field "$response" "timeout")
+  yp_timeout=\${yp_timeout:-120}
+  local max_polls=$yp_timeout  # 1 poll per second
+  if [ "$yp_timeout" = "0" ]; then
+    max_polls=999999  # 0 = wait forever
+  fi
   local poll_count=0
+  local remaining
   local poll_resp poll_status poll_msg totp_code totp_response yp_totp_status
-  printf "  Enter TOTP code or master key: " >&9
+
+  if [ "$yp_timeout" != "0" ]; then
+    printf "  Timeout in %ds | Enter TOTP code or master key: " "$yp_timeout" >&9
+  else
+    printf "  Enter TOTP code or master key: " >&9
+  fi
+
   while [ $poll_count -lt $max_polls ]; do
     # Poll for remote resolution
     poll_resp=$(yespapa_send "{\\"check\\":\\"$cmd_id\\"}")
@@ -146,13 +159,13 @@ _yp_intercept_inner() {
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&9
-      [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
+      echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 0
     elif [ "$poll_status" = "denied" ]; then
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&9
-      [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
+      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 1
     fi
 
@@ -166,24 +179,34 @@ _yp_intercept_inner() {
       if [ "$yp_totp_status" = "approved" ]; then
         echo "" >&9
         echo "  [YesPaPa] Approved" >&9
-        [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&9
+        echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"totp_stdin\\",\\"id\\":\\"$cmd_id\\"}" >&9
         return 0
       fi
       if [ $attempts -ge 3 ]; then
         echo "" >&9
         echo "  [YesPaPa] Too many attempts. Command denied." >&9
-        [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
+        echo "  Tip: retry with --justification \\"reason\\" to help the approver." >&9
+        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"max_attempts\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
         return 1
       fi
       echo "  Invalid code or master key (attempt $attempts/3). Try again: " >&9
     fi
 
     poll_count=$((poll_count + 1))
+
+    # Show countdown every 15 seconds (avoid spamming)
+    if [ "$yp_timeout" != "0" ]; then
+      remaining=$((yp_timeout - poll_count))
+      if [ $((poll_count % 15)) -eq 0 ] && [ $remaining -gt 0 ]; then
+        printf "\\r  Timeout in %ds | Enter TOTP code or master key: " "$remaining" >&9
+      fi
+    fi
   done
 
   echo "" >&9
-  echo "  [YesPaPa] Timed out waiting for approval." >&9
-  [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"id\\":\\"$cmd_id\\"}" >&9
+  echo "  [YesPaPa] Timed out waiting for approval (\${yp_timeout}s)." >&9
+  echo "  Tip: retry with --justification \\"reason\\" to help the approver." >&9
+  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
   return 1
 }
 

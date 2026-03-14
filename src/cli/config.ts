@@ -11,6 +11,13 @@ const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
 
 const ALLOWED_KEYS = ['allow_password_bypass', 'default_timeout', 'allow_sudo_bypass', 'allow_remote_exec'];
 
+const CONFIG_DEFAULTS: Record<string, { default: string; description: string }> = {
+  allow_password_bypass: { default: 'true', description: 'Allow master key as TOTP bypass for command approval' },
+  default_timeout: { default: '120', description: 'Approval timeout in seconds (0 = wait forever)' },
+  allow_sudo_bypass: { default: 'true', description: 'Auto-approve sudo commands (false = require TOTP)' },
+  allow_remote_exec: { default: 'false', description: 'Enable yespapa exec for programmatic access' },
+};
+
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, (answer) => resolve(answer));
@@ -92,7 +99,33 @@ const getCommand = new Command('get')
     db.close();
   });
 
+const listCommand = new Command('list')
+  .description('List all config keys with current values and defaults')
+  .action(() => {
+    if (!existsSync(DB_PATH)) {
+      console.log('YesPaPa is not initialized.');
+      process.exit(1);
+    }
+
+    const db = openDatabase(DB_PATH);
+    console.log('\nYesPaPa Configuration\n');
+    console.log('  Key                      Value             Default    Description');
+    console.log('  ─────────────────────────────────────────────────────────────────────');
+    for (const key of ALLOWED_KEYS) {
+      const meta = CONFIG_DEFAULTS[key];
+      const value = getConfig(db, key);
+      const displayValue = value ?? `(${meta.default})`;
+      const isDefault = !value;
+      console.log(
+        `  ${key.padEnd(25)}${displayValue.padEnd(18)}${meta.default.padEnd(11)}${meta.description}${isDefault ? '' : ''}`,
+      );
+    }
+    console.log('');
+    db.close();
+  });
+
 export const configCommand = new Command('config')
   .description('Manage YesPaPa configuration')
   .addCommand(setCommand)
-  .addCommand(getCommand);
+  .addCommand(getCommand)
+  .addCommand(listCommand);
