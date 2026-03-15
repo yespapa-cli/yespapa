@@ -46,6 +46,30 @@ describe('validateConfigValue', () => {
     }
   });
 
+  describe('headless_action', () => {
+    it('accepts "allow"', () => {
+      expect(validateConfigValue('headless_action', 'allow')).toBeNull();
+    });
+
+    it('accepts "block"', () => {
+      expect(validateConfigValue('headless_action', 'block')).toBeNull();
+    });
+
+    it('accepts "log_only"', () => {
+      expect(validateConfigValue('headless_action', 'log_only')).toBeNull();
+    });
+
+    it('rejects "deny"', () => {
+      const error = validateConfigValue('headless_action', 'deny');
+      expect(error).toContain('Invalid value');
+      expect(error).toContain('allow, block, or log_only');
+    });
+
+    it('rejects "true"', () => {
+      expect(validateConfigValue('headless_action', 'true')).toContain('Invalid value');
+    });
+  });
+
   describe('unknown keys', () => {
     it('returns null for unknown keys (no validation)', () => {
       expect(validateConfigValue('unknown_key', 'anything')).toBeNull();

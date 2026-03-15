@@ -2,20 +2,22 @@ import { Command } from 'commander';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { existsSync } from 'node:fs';
+import { existsSync, writeFileSync, mkdirSync } from 'node:fs';
 import { openDatabase, getConfig, setConfig } from '../db/index.js';
 import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
 
-const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
+const YESPAPA_DIR = join(homedir(), '.yespapa');
+const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
 
-const ALLOWED_KEYS = ['allow_password_bypass', 'default_timeout', 'allow_sudo_bypass', 'allow_remote_exec'];
+const ALLOWED_KEYS = ['allow_password_bypass', 'default_timeout', 'allow_sudo_bypass', 'allow_remote_exec', 'headless_action'];
 
 const CONFIG_DEFAULTS: Record<string, { default: string; description: string }> = {
   allow_password_bypass: { default: 'true', description: 'Allow master key as TOTP bypass for command approval' },
   default_timeout: { default: '120', description: 'Approval timeout in seconds (0 = wait forever)' },
   allow_sudo_bypass: { default: 'true', description: 'Auto-approve sudo commands (false = require TOTP)' },
   allow_remote_exec: { default: 'false', description: 'Enable yespapa exec for programmatic access' },
+  headless_action: { default: 'allow', description: 'Action when no terminal is available: allow, block, or log_only' },
 };
 
 /**
@@ -36,6 +38,12 @@ export function validateConfigValue(key: string, value: string): string | null {
     case 'allow_remote_exec': {
       if (value !== 'true' && value !== 'false') {
         return `Invalid value for ${key}: "${value}"\n  Expected: true or false`;
+      }
+      return null;
+    }
+    case 'headless_action': {
+      if (!['allow', 'block', 'log_only'].includes(value)) {
+        return `Invalid value for headless_action: "${value}"\n  Expected: allow, block, or log_only`;
       }
       return null;
     }
@@ -108,6 +116,15 @@ const setCommand = new Command('set')
       }
 
       setConfig(db, key, value);
+
+      // Write headless_action to cache file so shell wrappers can read it without contacting the daemon
+      if (key === 'headless_action') {
+        if (!existsSync(YESPAPA_DIR)) {
+          mkdirSync(YESPAPA_DIR, { recursive: true });
+        }
+        writeFileSync(join(YESPAPA_DIR, 'headless_action'), value, { mode: 0o644 });
+      }
+
       console.log(`Config updated: ${key} = ${value}`);
       console.log('Restart the daemon for changes to take effect: yespapa restart');
     } finally {

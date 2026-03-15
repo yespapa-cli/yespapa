@@ -42,6 +42,20 @@ describe('shell interceptor generation', () => {
     expect(script).toContain('read -r -t 1 totp_code');
   });
 
+  it('uses agent-friendly interception messaging', () => {
+    expect(script).toContain('Waiting for Human Approval');
+    expect(script).toContain('STATUS: PENDING');
+    expect(script).toContain('DO NOT close this process, retry, or work around it');
+    expect(script).toContain('The human is reviewing. Just wait for the result.');
+    expect(script).toContain('Waiting for human approval...');
+  });
+
+  it('reads headless_action config for non-TTY contexts', () => {
+    expect(script).toContain('headless_action');
+    expect(script).toContain('headless bypass');
+    expect(script).toContain('no terminal');
+  });
+
   it('uses the provided socket path', () => {
     expect(script).toContain('/tmp/yespapa-test.sock');
   });

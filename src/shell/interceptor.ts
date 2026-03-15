@@ -105,12 +105,29 @@ if [ "$_yp_status" = "approved" ]; then
 fi
 
 if [ "$_yp_status" = "needs_totp" ]; then
-  # In non-interactive mode, we can't prompt — block the command
+  # In non-interactive mode, check headless_action config
   if [ ! -t 0 ]; then
-    echo "[YesPaPa] Command requires approval but no terminal is available. Blocked." >&2
-    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$_yp_full\\",\\"reason\\":\\"no_terminal\\"}" >&2
-    unset _YP_INTERCEPTING
-    exit 1
+    _yp_headless="allow"
+    if [ -f "$HOME/.yespapa/headless_action" ]; then
+      _yp_headless=$(cat "$HOME/.yespapa/headless_action" 2>/dev/null)
+    fi
+    case "$_yp_headless" in
+      block)
+        echo "[YesPaPa] Command requires approval but no terminal is available. Blocked." >&2
+        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$_yp_full\\",\\"reason\\":\\"no_terminal\\"}" >&2
+        unset _YP_INTERCEPTING
+        exit 1
+        ;;
+      log_only)
+        unset _YP_INTERCEPTING
+        exec "${realBinaryPath}" "$@"
+        ;;
+      *)
+        echo "[YesPaPa] ✓ Approved (no terminal — headless bypass)" >&2
+        unset _YP_INTERCEPTING
+        exec "${realBinaryPath}" "$@"
+        ;;
+    esac
   fi
 
   # Interactive terminal available — prompt for TOTP
@@ -125,14 +142,17 @@ if [ "$_yp_status" = "needs_totp" ]; then
   fi
 
   echo "" >&2
-  echo "  [YesPaPa] Command requires approval: $_yp_full" >&2
+  echo "  [YesPaPa] Waiting for human approval: $_yp_full" >&2
   [ -n "$_yp_rule" ] && echo "  Rule: $_yp_rule" >&2
   echo "  ID: $_yp_id" >&2
+  echo "  STATUS: PENDING — the human owner has been notified." >&2
+  echo "  This process will block until approved (exit 0) or denied (exit 1)." >&2
+  echo "  >>> DO NOT close, retry, or work around. Wait for the result. <<<" >&2
   echo "" >&2
 
   _yp_attempts=0
   while [ $_yp_attempts -lt 3 ]; do
-    printf "  Enter TOTP code or master key: " >&2
+    printf "  Waiting for human approval... | Enter TOTP code or master key: " >&2
     read -r _yp_code
     if [ -n "$_yp_code" ]; then
       _yp_attempts=$((_yp_attempts + 1))
@@ -349,25 +369,53 @@ _yp_intercept_inner() {
     return 1
   fi
 
+  # Check if we have a terminal — if not, apply headless_action policy
+  if [ ! -t 0 ] || [ ! -t 1 ]; then
+    local _yp_headless="allow"
+    if [ -f "$HOME/.yespapa/headless_action" ]; then
+      _yp_headless=$(cat "$HOME/.yespapa/headless_action" 2>/dev/null)
+    fi
+    case "$_yp_headless" in
+      block)
+        echo "[YesPaPa] Command requires approval but no terminal is available. Blocked." >&9
+        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"no_terminal\\"}" >&9
+        return 1
+        ;;
+      log_only)
+        return 0
+        ;;
+      *)
+        echo "[YesPaPa] ✓ Approved (no terminal — headless bypass)" >&9
+        return 0
+        ;;
+    esac
+  fi
+
   # Phase 2: TOTP prompt with agent-friendly output
   local cmd_id rule
   cmd_id=$(yespapa_json_field "$response" "id")
   rule=$(yespapa_json_field "$response" "rule")
   echo "" >&9
-  echo "  ┌─────────────────────────────────────────────────┐" >&9
-  echo "  │  YesPaPa — Command Requires Human Approval      │" >&9
-  echo "  ├─────────────────────────────────────────────────┤" >&9
+  echo "  ┌─────────────────────────────────────────────────────────────────┐" >&9
+  echo "  │  YesPaPa — Waiting for Human Approval                          │" >&9
+  echo "  ├─────────────────────────────────────────────────────────────────┤" >&9
   echo "  │  Command: $full_cmd" >&9
   if [ -n "$rule" ]; then
     echo "  │  Rule:    $rule" >&9
   fi
   echo "  │  ID:      $cmd_id" >&9
-  echo "  ├─────────────────────────────────────────────────┤" >&9
-  echo "  │  Enter TOTP code or master key, or              │" >&9
-  echo "  │  approve via YesPaPa app.                      │" >&9
-  echo "  │  Tip: use --justification \\"reason\\" to help the │" >&9
-  echo "  │  approver decide.                               │" >&9
-  echo "  └─────────────────────────────────────────────────┘" >&9
+  echo "  ├─────────────────────────────────────────────────────────────────┤" >&9
+  echo "  │  STATUS: PENDING — the human owner has been notified.          │" >&9
+  echo "  │                                                                │" >&9
+  echo "  │  This process will block until the human approves or denies.   │" >&9
+  echo "  │  • If approved → this command exits 0 and the command runs.    │" >&9
+  echo "  │  • If denied/timeout → this command exits 1.                   │" >&9
+  echo "  │                                                                │" >&9
+  echo "  │  >>> DO NOT close this process, retry, or work around it. <<<  │" >&9
+  echo "  │  >>> The human is reviewing. Just wait for the result.    <<<  │" >&9
+  echo "  │                                                                │" >&9
+  echo "  │  Tip: use --justification \\"reason\\" to help the approver.       │" >&9
+  echo "  └─────────────────────────────────────────────────────────────────┘" >&9
   echo "" >&9
 
   local attempts=0
@@ -383,9 +431,9 @@ _yp_intercept_inner() {
   local poll_resp poll_status poll_msg totp_code totp_response yp_totp_status
 
   if [ "$yp_timeout" != "0" ]; then
-    printf "  Timeout in %ds | Enter TOTP code or master key: " "$yp_timeout" >&9
+    printf "  Waiting for human approval... (%ds remaining) | Enter TOTP code or master key: " "$yp_timeout" >&9
   else
-    printf "  Enter TOTP code or master key: " >&9
+    printf "  Waiting for human approval... | Enter TOTP code or master key: " >&9
   fi
 
   while [ $poll_count -lt $max_polls ]; do
@@ -402,7 +450,7 @@ _yp_intercept_inner() {
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
       echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&9
-      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
+      echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"action\\":\\"wait_and_retry_later\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 1
     fi
 
@@ -435,7 +483,7 @@ _yp_intercept_inner() {
     if [ "$yp_timeout" != "0" ]; then
       remaining=$((yp_timeout - poll_count))
       if [ $((poll_count % 15)) -eq 0 ] && [ $remaining -gt 0 ]; then
-        printf "\\r  Timeout in %ds | Enter TOTP code or master key: " "$remaining" >&9
+        printf "\\r  Waiting for human approval... (%ds remaining) | Enter TOTP code or master key: " "$remaining" >&9
       fi
     fi
   done
@@ -443,7 +491,7 @@ _yp_intercept_inner() {
   echo "" >&9
   echo "  [YesPaPa] Timed out waiting for approval (\${yp_timeout}s)." >&9
   echo "  Tip: retry with --justification \\"reason\\" to help the approver." >&9
-  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"hint\\":\\"Retry with --justification to help the approver\\",\\"id\\":\\"$cmd_id\\"}" >&9
+  echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"hint\\":\\"The human did not respond in time. Ask the user to approve faster or increase the timeout.\\",\\"id\\":\\"$cmd_id\\"}" >&9
   return 1
 }
 
