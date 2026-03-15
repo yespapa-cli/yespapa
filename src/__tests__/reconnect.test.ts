@@ -1,37 +1,42 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createReconnectManager, type ConnectionState } from '../remote/reconnect.js';
+import type { RemoteProvider, RemoteSubscription } from '../remote/provider.js';
 
 // Mock the sync module
 vi.mock('../remote/sync.js', () => ({
-  subscribeToHostChannel: vi.fn().mockReturnValue({
-    on: vi.fn().mockReturnThis(),
-    subscribe: vi.fn().mockReturnThis(),
-  }),
+  subscribeToHostChannel: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
   fetchGracePeriods: vi.fn().mockResolvedValue(undefined),
   getChannelCount: vi.fn().mockReturnValue(1),
 }));
 
-function createMockRemote() {
+function createMockProvider(): RemoteProvider {
   return {
-    channel: vi.fn().mockReturnValue({
-      on: vi.fn().mockReturnThis(),
-      subscribe: vi.fn().mockReturnThis(),
-    }),
-    removeChannel: vi.fn(),
-    removeAllChannels: vi.fn(),
-  } as unknown as import('@supabase/supabase-js').SupabaseClient;
+    signInAnonymously: vi.fn(),
+    refreshSession: vi.fn(),
+    findHostsByFingerprint: vi.fn(),
+    getHostById: vi.fn(),
+    insertHost: vi.fn(),
+    updateHost: vi.fn(),
+    insertCommand: vi.fn(),
+    updateCommand: vi.fn(),
+    fetchGracePeriods: vi.fn(),
+    subscribeToHostEvents: vi.fn().mockReturnValue({ unsubscribe: vi.fn() } as RemoteSubscription),
+    sendPushNotification: vi.fn(),
+    getActiveSubscriptionCount: vi.fn().mockReturnValue(0),
+    removeAllSubscriptions: vi.fn(),
+  };
 }
 
 describe('reconnect manager', () => {
   it('starts in disconnected state', () => {
-    const mgr = createReconnectManager(createMockRemote(), 'host-1', () => false);
+    const mgr = createReconnectManager(createMockProvider(), 'host-1', () => false);
     expect(mgr.getState()).toBe('disconnected');
   });
 
   it('transitions to connected on connect', () => {
     const states: ConnectionState[] = [];
     const mgr = createReconnectManager(
-      createMockRemote(),
+      createMockProvider(),
       'host-1',
       () => false,
       (s) => states.push(s),
@@ -41,17 +46,17 @@ describe('reconnect manager', () => {
   });
 
   it('transitions to disconnected on disconnect', () => {
-    const remote = createMockRemote();
-    const mgr = createReconnectManager(remote, 'host-1', () => false);
+    const provider = createMockProvider();
+    const mgr = createReconnectManager(provider, 'host-1', () => false);
     mgr.connect();
     mgr.disconnect();
     expect(mgr.getState()).toBe('disconnected');
-    expect(remote.removeAllChannels).toHaveBeenCalled();
+    expect(provider.removeAllSubscriptions).toHaveBeenCalled();
   });
 
   it('calls onStateChange callback', () => {
     const callback = vi.fn();
-    const mgr = createReconnectManager(createMockRemote(), 'host-1', () => false, callback);
+    const mgr = createReconnectManager(createMockProvider(), 'host-1', () => false, callback);
     mgr.connect();
     expect(callback).toHaveBeenCalledWith('connected');
     mgr.disconnect();

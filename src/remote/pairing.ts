@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { RemoteProvider } from './provider.js';
 import { generateQRString } from '../totp/qr.js';
 
 export interface PairingData {
@@ -118,17 +118,13 @@ export function generatePairingWebUrl(payload: CombinedPairingData): string {
  * The mobile app will present this token when pairing.
  */
 export async function storePairingToken(
-  remote: SupabaseClient,
+  remote: RemoteProvider,
   hostId: string,
   pairingToken: string,
 ): Promise<void> {
-  const { error } = await remote
-    .from('hosts')
-    .update({ push_token: `pairing:${pairingToken}` })
-    .eq('id', hostId);
-
-  if (error) {
-    throw new Error(`Failed to store pairing token: ${error.message}`);
+  const result = await remote.updateHost(hostId, { push_token: `pairing:${pairingToken}` });
+  if (!result) {
+    throw new Error('Failed to store pairing token: host not found');
   }
 }
 
@@ -137,25 +133,15 @@ export async function storePairingToken(
  * Returns true if the token matches, and clears it (one-time use).
  */
 export async function consumePairingToken(
-  remote: SupabaseClient,
+  remote: RemoteProvider,
   hostId: string,
   token: string,
 ): Promise<boolean> {
-  const { data, error } = await remote
-    .from('hosts')
-    .select('push_token')
-    .eq('id', hostId)
-    .single();
+  const host = await remote.getHostById(hostId);
+  if (!host) return false;
 
-  if (error || !data) return false;
+  if (host.push_token !== `pairing:${token}`) return false;
 
-  const storedToken = data.push_token as string | null;
-  if (storedToken !== `pairing:${token}`) return false;
-
-  await remote
-    .from('hosts')
-    .update({ push_token: null })
-    .eq('id', hostId);
-
+  await remote.updateHost(hostId, { push_token: null });
   return true;
 }

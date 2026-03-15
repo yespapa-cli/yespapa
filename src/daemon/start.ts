@@ -8,7 +8,7 @@
 
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { openDatabase, setConfig, getConfig, getActiveGracePeriods, createGracePeriod, revokeGracePeriod, upsertGracePeriod } from '../db/index.js';
+import { openDatabase, setConfig, getConfig, getActiveGracePeriods, revokeGracePeriod, upsertGracePeriod } from '../db/index.js';
 import { decryptSeed, verifyPassword } from '../crypto/index.js';
 import { validateCode } from '../totp/index.js';
 import type { PasswordValidator } from './socket.js';
@@ -18,9 +18,10 @@ import { startDaemonServer, SOCKET_PATH } from './socket.js';
 import { startHeartbeat } from './heartbeat.js';
 import { appendFileSync, statSync, renameSync, existsSync as fsExists, unlinkSync } from 'node:fs';
 import { initializeRemote } from '../remote/index.js';
-import { pushCommand, syncCommandResolution, subscribeToApprovals, fetchGracePeriods } from '../remote/sync.js';
+import { pushCommand, syncCommandResolution, fetchGracePeriods } from '../remote/sync.js';
 import { createReconnectManager } from '../remote/reconnect.js';
 import { injectInterceptor } from '../shell/interceptor.js';
+import type { RemoteProviderType } from '../remote/factory.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -108,26 +109,25 @@ async function main(): Promise<void> {
     const remoteUrl = getConfig(db, 'remote_url');
     const remoteKey = getConfig(db, 'remote_key');
     const remoteHostId = getConfig(db, 'remote_host_id');
+    const remoteType = (getConfig(db, 'remote_type') ?? 'supabase') as RemoteProviderType;
 
     let onCommandPending: ((id: string, cmd: string, justification?: string) => void) | undefined;
     let onCommandResolved: ((id: string, status: string, source?: string) => void) | undefined;
 
     if (remoteUrl && remoteKey && remoteHostId) {
       try {
-        const remote = initializeRemote(remoteUrl, remoteKey);
+        const remote = await initializeRemote(remoteUrl, remoteKey, remoteType);
 
         // Restore session — required for RLS policies to match user_id
         const refreshToken = getConfig(db, 'remote_refresh_token');
         if (refreshToken) {
-          const { restoreSession } = await import('../remote/index.js');
           try {
-            await restoreSession(refreshToken);
+            await remote.refreshSession(refreshToken);
             log('Remote session restored successfully');
           } catch (authErr) {
             // Refresh token expired — try fresh anonymous auth as fallback
             log(`Session restore failed (${authErr}), trying fresh auth...`);
-            const { authenticateAnonymous } = await import('../remote/index.js');
-            const { refreshToken: newToken } = await authenticateAnonymous();
+            const { refreshToken: newToken } = await remote.signInAnonymously();
             setConfig(db, 'remote_refresh_token', newToken);
             log('Remote authenticated with new session (WARNING: user_id may have changed)');
           }
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
           (msg) => log(`[sync] ${msg}`),
         );
         reconnector.connect();
-        log(`Remote server connected (host: ${remoteHostId})`);
+        log(`Remote server connected (host: ${remoteHostId}, type: ${remoteType})`);
 
         // Periodic grace period sync to catch missed Realtime events (e.g. revocations)
         const GRACE_POLL_INTERVAL = 30_000; // 30s

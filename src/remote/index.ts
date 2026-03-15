@@ -1,61 +1,44 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
 import { hostname, userInfo, platform } from 'node:os';
-import WebSocket from 'ws';
+import type { RemoteProvider } from './provider.js';
+import { createRemoteProvider, type RemoteProviderType } from './factory.js';
 
-// Polyfill WebSocket for Node.js — required by the Realtime client
-if (typeof globalThis.WebSocket === 'undefined') {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (globalThis as any).WebSocket = WebSocket;
-}
+export type { HostRecord } from './provider.js';
+export type { RemoteProvider } from './provider.js';
+export type { RemoteProviderType } from './factory.js';
 
 export interface RemoteConfig {
   url: string;
   anonKey: string;
 }
 
-export interface HostRecord {
-  id: string;
-  user_id: string;
-  host_name: string;
-  host_fingerprint: string;
-  push_token: string | null;
-  last_seen_at: string;
-  created_at: string;
-}
-
-let client: SupabaseClient | null = null;
+let provider: RemoteProvider | null = null;
 
 /**
- * Initialize the remote client. Returns the client instance.
- * Reuses existing client if already initialized with same URL.
+ * Initialize the remote provider. Returns the provider instance.
+ * Reuses existing provider if already initialized.
  */
-export function initializeRemote(url: string, anonKey: string): SupabaseClient {
-  if (client) return client;
-  client = createClient(url, anonKey, {
-    auth: {
-      autoRefreshToken: true,
-      persistSession: false,
-    },
-  });
-  return client;
+export async function initializeRemote(url: string, key: string, type?: RemoteProviderType): Promise<RemoteProvider> {
+  if (provider) return provider;
+  provider = await createRemoteProvider(type ?? 'supabase', url, key);
+  return provider;
 }
 
 /**
- * Get the current remote client. Throws if not initialized.
+ * Get the current remote provider. Throws if not initialized.
  */
-export function getRemoteClient(): SupabaseClient {
-  if (!client) {
-    throw new Error('Remote client not initialized. Call initializeRemote() first.');
+export function getRemoteProvider(): RemoteProvider {
+  if (!provider) {
+    throw new Error('Remote provider not initialized. Call initializeRemote() first.');
   }
-  return client;
+  return provider;
 }
 
 /**
- * Reset the client (for testing).
+ * Reset the provider (for testing).
  */
 export function resetRemoteClient(): void {
-  client = null;
+  provider = null;
 }
 
 /**
@@ -63,19 +46,7 @@ export function resetRemoteClient(): void {
  * Returns the anonymous user session.
  */
 export async function authenticateAnonymous(): Promise<{ userId: string; accessToken: string; refreshToken: string }> {
-  const remote = getRemoteClient();
-  const { data, error } = await remote.auth.signInAnonymously();
-  if (error) {
-    throw new Error(`Anonymous auth failed: ${error.message}`);
-  }
-  if (!data.user || !data.session) {
-    throw new Error('Anonymous auth returned no user or session');
-  }
-  return {
-    userId: data.user.id,
-    accessToken: data.session.access_token,
-    refreshToken: data.session.refresh_token,
-  };
+  return getRemoteProvider().signInAnonymously();
 }
 
 /**
@@ -83,18 +54,7 @@ export async function authenticateAnonymous(): Promise<{ userId: string; accessT
  * This allows the daemon to authenticate as the same user across restarts.
  */
 export async function restoreSession(refreshToken: string): Promise<{ userId: string; accessToken: string }> {
-  const remote = getRemoteClient();
-  const { data, error } = await remote.auth.refreshSession({ refresh_token: refreshToken });
-  if (error) {
-    throw new Error(`Session restore failed: ${error.message}`);
-  }
-  if (!data.user || !data.session) {
-    throw new Error('Session restore returned no user or session');
-  }
-  return {
-    userId: data.user.id,
-    accessToken: data.session.access_token,
-  };
+  return getRemoteProvider().refreshSession(refreshToken);
 }
 
 /**
@@ -107,89 +67,62 @@ export function generateHostFingerprint(): string {
 }
 
 /**
- * Register a host in the remote `hosts` table.
+ * Register a host with the remote server.
  * If a host with the same fingerprint exists, returns the existing record.
  */
 export async function registerHost(
   hostName: string,
   fingerprint?: string,
-): Promise<HostRecord> {
-  const remote = getRemoteClient();
+): Promise<import('./provider.js').HostRecord> {
+  const remote = getRemoteProvider();
   const fp = fingerprint ?? generateHostFingerprint();
 
   // Try to find an existing host owned by the current user
-  const { data: ownedHosts } = await remote
-    .from('hosts')
-    .select('*')
-    .eq('host_fingerprint', fp);
+  const ownedHosts = await remote.findHostsByFingerprint(fp);
 
   // Check if any of the returned hosts are owned by us (we can update them)
-  if (ownedHosts && ownedHosts.length > 0) {
+  if (ownedHosts.length > 0) {
     // Try updating the first one — will succeed only if we own it (RLS)
     const candidate = ownedHosts[0];
-    const { data: updated, error: updateError } = await remote
-      .from('hosts')
-      .update({ host_name: hostName, last_seen_at: new Date().toISOString() })
-      .eq('id', candidate.id)
-      .select()
-      .maybeSingle();
+    const updated = await remote.updateHost(candidate.id, {
+      host_name: hostName,
+      last_seen_at: new Date().toISOString(),
+    });
 
-    if (!updateError && updated) {
-      return updated as HostRecord;
+    if (updated) {
+      return updated;
     }
     // If update failed (different owner), fall through to insert
   }
 
   // Insert new host for the current user (new fingerprint or different owner)
   let insertFp = fp;
-  if (ownedHosts && ownedHosts.length > 0) {
+  if (ownedHosts.length > 0) {
     insertFp = `${fp}:${Date.now()}`;
   }
 
-  const { data: inserted, error: insertError } = await remote
-    .from('hosts')
-    .insert({
-      host_name: hostName,
-      host_fingerprint: insertFp,
-      last_seen_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
-
-  if (insertError) {
-    throw new Error(`Failed to register host: ${insertError.message}`);
-  }
-  return inserted as HostRecord;
+  return remote.insertHost({
+    host_name: hostName,
+    host_fingerprint: insertFp,
+  });
 }
 
 /**
  * Update the host heartbeat timestamp.
  */
 export async function updateHeartbeat(hostId: string): Promise<void> {
-  const remote = getRemoteClient();
-  const { error } = await remote
-    .from('hosts')
-    .update({ last_seen_at: new Date().toISOString() })
-    .eq('id', hostId);
-
-  if (error) {
-    throw new Error(`Failed to update heartbeat: ${error.message}`);
+  const remote = getRemoteProvider();
+  const result = await remote.updateHost(hostId, { last_seen_at: new Date().toISOString() });
+  if (!result) {
+    throw new Error('Failed to update heartbeat: host not found or not owned');
   }
 }
 
 /**
  * Get a host by its fingerprint.
  */
-export async function getHostByFingerprint(fingerprint: string): Promise<HostRecord | null> {
-  const remote = getRemoteClient();
-  const { data, error } = await remote
-    .from('hosts')
-    .select('*')
-    .eq('host_fingerprint', fingerprint)
-    .maybeSingle();
-
-  if (error) {
-    throw new Error(`Failed to fetch host: ${error.message}`);
-  }
-  return data as HostRecord | null;
+export async function getHostByFingerprint(fingerprint: string): Promise<import('./provider.js').HostRecord | null> {
+  const remote = getRemoteProvider();
+  const hosts = await remote.findHostsByFingerprint(fingerprint);
+  return hosts.length > 0 ? hosts[0] : null;
 }

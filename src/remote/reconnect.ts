@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js';
+import type { RemoteProvider } from './provider.js';
 import { subscribeToHostChannel, fetchGracePeriods, getChannelCount, type SyncConfig } from './sync.js';
 import type { TotpValidator } from '../daemon/socket.js';
 
@@ -19,7 +19,7 @@ const BACKOFF_MAX_MS = 60_000;
  * Handles Realtime subscriptions with automatic reconnection.
  */
 export function createReconnectManager(
-  remote: SupabaseClient,
+  remote: RemoteProvider,
   hostId: string,
   validateTotp: TotpValidator,
   onStateChange?: (state: ConnectionState) => void,
@@ -81,7 +81,7 @@ export function createReconnectManager(
       clearTimeout(retryTimer);
       retryTimer = null;
     }
-    remote.removeAllChannels();
+    remote.removeAllSubscriptions();
     setState('disconnected');
     retryCount = 0;
   }
