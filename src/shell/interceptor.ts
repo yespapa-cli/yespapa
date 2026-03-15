@@ -1,20 +1,217 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { execSync } from 'node:child_process';
 import { SOCKET_PATH } from '../daemon/socket.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const INTERCEPTOR_PATH = join(YESPAPA_DIR, 'interceptor.sh');
+const BIN_DIR = join(YESPAPA_DIR, 'bin');
 const SOURCE_LINE = '[ -f ~/.yespapa/interceptor.sh ] && source ~/.yespapa/interceptor.sh # YesPaPa';
+const BASH_ENV_LINE = 'export BASH_ENV="$HOME/.yespapa/interceptor.sh" # YesPaPa';
+const FISH_CONF_DIR_NAME = '.config/fish/conf.d';
 
 /**
  * List of shell functions defined by the interceptor.
  * Used for cleanup during uninstall.
  */
 export const INTERCEPTOR_FUNCTIONS = [
-  'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill',
+  'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill', 'rmdir',
   'yespapa_intercept', '_yp_intercept_inner', '_yp_exec', 'yespapa_send', 'yespapa_json_field',
 ];
+
+/**
+ * Commands that get PATH-based binary wrappers in ~/.yespapa/bin/.
+ * These wrappers intercept commands in non-interactive shells (scripts, cron, subprocesses).
+ * Each entry maps command name -> real binary path (resolved at install time).
+ */
+export const WRAPPER_COMMANDS = ['rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill', 'rmdir'];
+
+/**
+ * Resolve the absolute path of a real binary, skipping any yespapa wrappers.
+ */
+function resolveRealBinary(command: string): string | null {
+  try {
+    // Use 'which -a' to get all matches, skip our own wrapper
+    const allPaths = execSync(`which -a ${command} 2>/dev/null`, { encoding: 'utf-8' })
+      .trim()
+      .split('\n')
+      .filter((p) => p && !p.includes('.yespapa/bin'));
+    return allPaths[0] ?? null;
+  } catch {
+    // Fallback: try common paths
+    const commonPaths = ['/bin', '/usr/bin', '/usr/local/bin', '/sbin', '/usr/sbin'];
+    for (const dir of commonPaths) {
+      const fullPath = join(dir, command);
+      if (existsSync(fullPath)) return fullPath;
+    }
+    return null;
+  }
+}
+
+/**
+ * Generate a PATH-based wrapper script for a single command.
+ * The wrapper sends the command to the daemon for rule evaluation.
+ * If denied, it prompts for TOTP. If approved (or no rule matches), it runs the real binary.
+ */
+function generateWrapperScript(command: string, realBinaryPath: string, socketPath: string): string {
+  return `#!/bin/sh
+# YesPaPa PATH wrapper for "${command}" — DO NOT EDIT
+# This file is managed by yespapa. Changes will be overwritten.
+# Real binary: ${realBinaryPath}
+
+# Avoid recursive interception if sourced interceptor already handled it
+if [ -n "$_YP_INTERCEPTING" ]; then
+  exec "${realBinaryPath}" "$@"
+fi
+export _YP_INTERCEPTING=1
+
+# Build JSON payload
+_yp_args_json=""
+_yp_first=1
+_yp_full="${command}"
+for _yp_arg in "$@"; do
+  _yp_full="$_yp_full $_yp_arg"
+  if [ $_yp_first -eq 1 ]; then _yp_first=0; else _yp_args_json="$_yp_args_json,"; fi
+  _yp_args_json="$_yp_args_json\\"$_yp_arg\\""
+done
+
+_yp_json="{\\"command\\":\\"${command}\\",\\"args\\":[$_yp_args_json],\\"fullCommand\\":\\"$_yp_full\\"}"
+
+# Send to daemon via Unix socket
+_yp_response=""
+if command -v nc >/dev/null 2>&1; then
+  _yp_response=$(printf '%s\\n' "$_yp_json" | nc -U ${socketPath} 2>/dev/null)
+fi
+
+if [ -z "$_yp_response" ]; then
+  # Daemon not running — block for safety
+  echo "[YesPaPa] Daemon not running. Command blocked for safety." >&2
+  unset _YP_INTERCEPTING
+  exit 1
+fi
+
+# Extract status field
+_yp_status=""
+if command -v python3 >/dev/null 2>&1; then
+  _yp_status=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('status',''))" "$_yp_response" 2>/dev/null)
+else
+  _yp_status=$(echo "$_yp_response" | sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p')
+fi
+
+if [ "$_yp_status" = "approved" ]; then
+  unset _YP_INTERCEPTING
+  exec "${realBinaryPath}" "$@"
+fi
+
+if [ "$_yp_status" = "needs_totp" ]; then
+  # In non-interactive mode, we can't prompt — block the command
+  if [ ! -t 0 ]; then
+    echo "[YesPaPa] Command requires approval but no terminal is available. Blocked." >&2
+    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$_yp_full\\",\\"reason\\":\\"no_terminal\\"}" >&2
+    unset _YP_INTERCEPTING
+    exit 1
+  fi
+
+  # Interactive terminal available — prompt for TOTP
+  _yp_id=""
+  _yp_rule=""
+  if command -v python3 >/dev/null 2>&1; then
+    _yp_id=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('id',''))" "$_yp_response" 2>/dev/null)
+    _yp_rule=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('rule',''))" "$_yp_response" 2>/dev/null)
+  else
+    _yp_id=$(echo "$_yp_response" | sed -n 's/.*"id":"\\([^"]*\\)".*/\\1/p')
+    _yp_rule=$(echo "$_yp_response" | sed -n 's/.*"rule":"\\([^"]*\\)".*/\\1/p')
+  fi
+
+  echo "" >&2
+  echo "  [YesPaPa] Command requires approval: $_yp_full" >&2
+  [ -n "$_yp_rule" ] && echo "  Rule: $_yp_rule" >&2
+  echo "  ID: $_yp_id" >&2
+  echo "" >&2
+
+  _yp_attempts=0
+  while [ $_yp_attempts -lt 3 ]; do
+    printf "  Enter TOTP code or master key: " >&2
+    read -r _yp_code
+    if [ -n "$_yp_code" ]; then
+      _yp_attempts=$((_yp_attempts + 1))
+      _yp_totp_json="{\\"totp\\":\\"$_yp_code\\",\\"id\\":\\"$_yp_id\\"}"
+      _yp_totp_resp=$(printf '%s\\n' "$_yp_totp_json" | nc -U ${socketPath} 2>/dev/null)
+      _yp_totp_status=""
+      if command -v python3 >/dev/null 2>&1; then
+        _yp_totp_status=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('status',''))" "$_yp_totp_resp" 2>/dev/null)
+      else
+        _yp_totp_status=$(echo "$_yp_totp_resp" | sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p')
+      fi
+      if [ "$_yp_totp_status" = "approved" ]; then
+        echo "  [YesPaPa] Approved" >&2
+        unset _YP_INTERCEPTING
+        exec "${realBinaryPath}" "$@"
+      fi
+      echo "  Invalid code (attempt $_yp_attempts/3)." >&2
+    fi
+  done
+  echo "  [YesPaPa] Too many attempts. Command denied." >&2
+  unset _YP_INTERCEPTING
+  exit 1
+fi
+
+# Any other status (denied, error)
+_yp_message=""
+if command -v python3 >/dev/null 2>&1; then
+  _yp_message=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('message',''))" "$_yp_response" 2>/dev/null)
+fi
+echo "[YesPaPa] Command denied: $_yp_message" >&2
+unset _YP_INTERCEPTING
+exit 1
+`;
+}
+
+/**
+ * Install PATH-based binary wrappers into ~/.yespapa/bin/.
+ * These shadow real binaries so non-interactive shells are also intercepted.
+ * Returns list of installed wrapper paths.
+ */
+export function installBinaryWrappers(socketPath: string = SOCKET_PATH): string[] {
+  if (!existsSync(BIN_DIR)) {
+    mkdirSync(BIN_DIR, { recursive: true });
+  }
+
+  const installed: string[] = [];
+  for (const cmd of WRAPPER_COMMANDS) {
+    const realPath = resolveRealBinary(cmd);
+    if (!realPath) continue; // Command not available on this system
+
+    const wrapperPath = join(BIN_DIR, cmd);
+
+    // Don't overwrite the yespapa CLI wrapper
+    if (cmd === 'yespapa') continue;
+
+    const script = generateWrapperScript(cmd, realPath, socketPath);
+    writeFileSync(wrapperPath, script, { mode: 0o755 });
+    installed.push(wrapperPath);
+  }
+
+  return installed;
+}
+
+/**
+ * Remove all binary wrappers from ~/.yespapa/bin/ (except the yespapa CLI wrapper).
+ */
+export function removeBinaryWrappers(): string[] {
+  if (!existsSync(BIN_DIR)) return [];
+
+  const removed: string[] = [];
+  for (const cmd of WRAPPER_COMMANDS) {
+    const wrapperPath = join(BIN_DIR, cmd);
+    if (existsSync(wrapperPath)) {
+      unlinkSync(wrapperPath);
+      removed.push(wrapperPath);
+    }
+  }
+  return removed;
+}
 
 /**
  * Generate the shell interceptor script.
@@ -318,6 +515,12 @@ kill() {
   esac
 }
 
+rmdir() {
+  if yespapa_intercept rmdir "$@"; then
+    _yp_exec rmdir "$@"
+  fi
+}
+
 # Auto-start daemon if not running
 if [ -S "${socketPath}" ]; then
   : # Socket exists, daemon likely running
@@ -329,12 +532,26 @@ fi`;
 }
 
 /**
+ * Resolve the real user's home directory, even under sudo.
+ */
+function resolveHome(): string {
+  const sudoUser = process.env['SUDO_USER'];
+  if (process.getuid?.() === 0 && sudoUser) {
+    return join(process.platform === 'darwin' ? '/Users' : '/home', sudoUser);
+  }
+  return homedir();
+}
+
+/**
  * Get the paths to the user's shell profiles.
+ * Includes "all instances" profiles (.zshenv, .bash_profile) for non-interactive coverage.
  */
 export function getShellProfiles(): string[] {
-  const home = homedir();
+  const home = resolveHome();
+  const shell = process.env.SHELL ?? '';
   const profiles: string[] = [];
 
+  // Interactive-only profiles
   const candidates = ['.bashrc', '.zshrc', '.bash_profile', '.zshenv', '.zprofile', '.profile'];
   for (const name of candidates) {
     const path = join(home, name);
@@ -343,16 +560,58 @@ export function getShellProfiles(): string[] {
     }
   }
 
+  // Ensure "all instances" profiles are always included for the user's shell
+  if (shell.includes('zsh')) {
+    const zshenv = join(home, '.zshenv');
+    if (!profiles.includes(zshenv)) {
+      profiles.push(zshenv); // Will be created by injectInterceptor
+    }
+  }
+
+  if (shell.includes('bash')) {
+    // .bash_profile is needed for BASH_ENV export
+    const bashProfile = join(home, '.bash_profile');
+    if (!profiles.includes(bashProfile)) {
+      profiles.push(bashProfile);
+    }
+  }
+
   if (profiles.length === 0) {
-    const shell = process.env.SHELL ?? '';
     if (shell.includes('zsh')) {
       profiles.push(join(home, '.zshrc'));
+      profiles.push(join(home, '.zshenv'));
     } else {
       profiles.push(join(home, '.bashrc'));
+      profiles.push(join(home, '.bash_profile'));
     }
   }
 
   return profiles;
+}
+
+/**
+ * Get the path to the fish conf.d interceptor, if fish is installed.
+ */
+function getFishConfPath(): string | null {
+  const home = resolveHome();
+  const fishConfDir = join(home, FISH_CONF_DIR_NAME);
+  // Only target fish if conf.d exists (user has fish installed)
+  if (existsSync(fishConfDir)) {
+    return join(fishConfDir, 'yespapa.fish');
+  }
+  return null;
+}
+
+/**
+ * Generate a fish-compatible interceptor script.
+ */
+function generateFishInterceptorScript(_socketPath: string): string {
+  return `# YesPaPa Shell Interceptor for fish — DO NOT EDIT
+# This file is managed by yespapa. Changes will be overwritten.
+
+# Add yespapa CLI to PATH
+set -gx PATH "$HOME/.yespapa/bin" $PATH
+`;
 }
 
 /**
@@ -386,41 +645,61 @@ export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
     if (hasActiveLine) {
       // Already present and active, just update the script file
       injected.push(profile);
-      continue;
-    }
-
-    // Uncomment if commented out (e.g., "# [ -f ~/.yespapa/...")
-    const commentedIndex = lines.findIndex(
-      (line) => line.trim() !== SOURCE_LINE && line.includes(SOURCE_LINE),
-    );
-    if (commentedIndex !== -1) {
-      lines[commentedIndex] = SOURCE_LINE;
-      content = lines.join('\n');
-      writeFileSync(profile, content);
-      injected.push(profile);
-      continue;
-    }
-
-    // Remove legacy inline block if present (migration from old format)
-    const LEGACY_START = '# >>> YesPaPa Shell Interceptor (DO NOT EDIT)';
-    const LEGACY_END = '# <<< YesPaPa Shell Interceptor';
-    if (content.includes(LEGACY_START)) {
-      const regex = new RegExp(
-        '\\n*' + escapeRegex(LEGACY_START) + '[\\s\\S]*?' + escapeRegex(LEGACY_END) + '\\n*',
+    } else {
+      // Uncomment if commented out (e.g., "# [ -f ~/.yespapa/...")
+      const commentedIndex = lines.findIndex(
+        (line) => line.trim() !== SOURCE_LINE && line.includes(SOURCE_LINE),
       );
-      content = content.replace(regex, '\n');
+      if (commentedIndex !== -1) {
+        lines[commentedIndex] = SOURCE_LINE;
+        content = lines.join('\n');
+        writeFileSync(profile, content);
+        injected.push(profile);
+      } else {
+        // Remove legacy inline block if present (migration from old format)
+        const LEGACY_START = '# >>> YesPaPa Shell Interceptor (DO NOT EDIT)';
+        const LEGACY_END = '# <<< YesPaPa Shell Interceptor';
+        if (content.includes(LEGACY_START)) {
+          const regex = new RegExp(
+            '\\n*' + escapeRegex(LEGACY_START) + '[\\s\\S]*?' + escapeRegex(LEGACY_END) + '\\n*',
+          );
+          content = content.replace(regex, '\n');
+        }
+
+        content = content.trimEnd() + '\n' + SOURCE_LINE + '\n';
+        writeFileSync(profile, content);
+        injected.push(profile);
+      }
     }
 
-    content = content.trimEnd() + '\n' + SOURCE_LINE + '\n';
-    writeFileSync(profile, content);
-    injected.push(profile);
+    // For bash profiles (.bash_profile, .profile), also inject BASH_ENV export
+    // so non-interactive bash (scripts, subprocesses) also loads the interceptor
+    const basename = profile.split('/').pop() ?? '';
+    if (['.bash_profile', '.profile'].includes(basename)) {
+      const currentContent = readFileSync(profile, 'utf-8');
+      if (!currentContent.includes(BASH_ENV_LINE)) {
+        writeFileSync(profile, currentContent.trimEnd() + '\n' + BASH_ENV_LINE + '\n');
+      }
+    }
   }
+
+  // Fish shell support: write interceptor to conf.d if fish is installed
+  const fishConfPath = getFishConfPath();
+  if (fishConfPath) {
+    const fishScript = generateFishInterceptorScript(socketPath);
+    writeFileSync(fishConfPath, fishScript, { mode: 0o755 });
+    injected.push(fishConfPath);
+  }
+
+  // Install PATH-based binary wrappers for non-interactive shell coverage
+  installBinaryWrappers(socketPath);
 
   return injected;
 }
 
 /**
  * Remove the source line from shell profiles.
+ * Also removes BASH_ENV exports, fish conf.d script, and binary wrappers.
  * The interceptor.sh file in ~/.yespapa/ is left for deletion with the directory.
  */
 export function removeInterceptor(): string[] {
@@ -431,6 +710,7 @@ export function removeInterceptor(): string[] {
     if (!existsSync(profile)) continue;
 
     let content = readFileSync(profile, 'utf-8');
+    let modified = false;
 
     // Remove the source line
     if (content.includes(SOURCE_LINE)) {
@@ -438,8 +718,16 @@ export function removeInterceptor(): string[] {
         .split('\n')
         .filter((line) => line !== SOURCE_LINE)
         .join('\n');
-      writeFileSync(profile, content);
-      removed.push(profile);
+      modified = true;
+    }
+
+    // Remove BASH_ENV export line
+    if (content.includes(BASH_ENV_LINE)) {
+      content = content
+        .split('\n')
+        .filter((line) => line !== BASH_ENV_LINE)
+        .join('\n');
+      modified = true;
     }
 
     // Also clean up legacy inline block if present
@@ -450,10 +738,24 @@ export function removeInterceptor(): string[] {
         '\\n*' + escapeRegex(LEGACY_START) + '[\\s\\S]*?' + escapeRegex(LEGACY_END) + '\\n*',
       );
       content = content.replace(regex, '\n');
+      modified = true;
+    }
+
+    if (modified) {
       writeFileSync(profile, content);
-      if (!removed.includes(profile)) removed.push(profile);
+      removed.push(profile);
     }
   }
+
+  // Remove fish conf.d script
+  const fishConfPath = getFishConfPath();
+  if (fishConfPath && existsSync(fishConfPath)) {
+    unlinkSync(fishConfPath);
+    removed.push(fishConfPath);
+  }
+
+  // Remove binary wrappers
+  removeBinaryWrappers();
 
   return removed;
 }

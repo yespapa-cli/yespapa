@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateInterceptorScript } from '../shell/interceptor.js';
+import { generateInterceptorScript, WRAPPER_COMMANDS } from '../shell/interceptor.js';
 
 describe('shell interceptor generation', () => {
   const script = generateInterceptorScript('/tmp/yespapa-test.sock');
@@ -61,5 +61,22 @@ describe('shell interceptor generation', () => {
       unlinkSync(tmpFile);
     }
     expect(true).toBe(true);
+  });
+});
+
+describe('WRAPPER_COMMANDS', () => {
+  it('includes all intercepted commands', () => {
+    expect(WRAPPER_COMMANDS).toContain('rm');
+    expect(WRAPPER_COMMANDS).toContain('git');
+    expect(WRAPPER_COMMANDS).toContain('chmod');
+    expect(WRAPPER_COMMANDS).toContain('sudo');
+    expect(WRAPPER_COMMANDS).toContain('dd');
+    expect(WRAPPER_COMMANDS).toContain('mkfs');
+    expect(WRAPPER_COMMANDS).toContain('kill');
+    expect(WRAPPER_COMMANDS).toContain('rmdir');
+  });
+
+  it('does not include yespapa itself', () => {
+    expect(WRAPPER_COMMANDS).not.toContain('yespapa');
   });
 });

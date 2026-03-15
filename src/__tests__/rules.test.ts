@@ -144,11 +144,11 @@ describe('custom rules via DB', () => {
 });
 
 describe('seedDefaultRules', () => {
-  it('seeds all 10 default rules', () => {
+  it('seeds all 11 default rules', () => {
     const db = openMemoryDatabase();
     seedDefaultRules(db);
     const rules = db.prepare('SELECT COUNT(*) as count FROM rules').get() as { count: number };
-    expect(rules.count).toBe(10);
+    expect(rules.count).toBe(11);
   });
 });
 

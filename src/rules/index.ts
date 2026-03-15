@@ -102,6 +102,12 @@ export const DEFAULT_DENY_RULES: DefaultRule[] = [
     reason: 'Force-kill process',
     match: (cmd, args) => cmd === 'kill' && (args.includes('-9') || args.includes('-SIGKILL')),
   },
+  {
+    pattern: 'rmdir',
+    bundle: 'destructive',
+    reason: 'Directory removal',
+    match: (cmd) => cmd === 'rmdir',
+  },
 ];
 
 // ── Evaluation ──────────────────────────────────────────────
