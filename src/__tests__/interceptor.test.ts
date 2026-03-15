@@ -29,6 +29,7 @@ describe('shell interceptor generation', () => {
   it('wraps git with subcommand checking', () => {
     expect(script).toContain('git()');
     expect(script).toContain('reset)');
+    expect(script).toContain('*--hard*');
     expect(script).toContain('push)');
   });
 
@@ -52,8 +53,19 @@ describe('shell interceptor generation', () => {
 
   it('reads headless_action config for non-TTY contexts', () => {
     expect(script).toContain('headless_action');
-    expect(script).toContain('headless bypass');
     expect(script).toContain('no terminal');
+  });
+
+  it('defaults headless to approve mode with poll loop', () => {
+    expect(script).toContain('_yp_headless="approve"');
+    expect(script).toContain('approve|*)');
+    expect(script).toContain('yespapa approve');
+    expect(script).toContain('Still waiting for approval');
+  });
+
+  it('supports allow mode for explicit headless bypass', () => {
+    expect(script).toContain('allow)');
+    expect(script).toContain('headless bypass');
   });
 
   it('uses the provided socket path', () => {
@@ -87,7 +99,6 @@ describe('WRAPPER_COMMANDS', () => {
     expect(WRAPPER_COMMANDS).toContain('dd');
     expect(WRAPPER_COMMANDS).toContain('mkfs');
     expect(WRAPPER_COMMANDS).toContain('kill');
-    expect(WRAPPER_COMMANDS).toContain('rmdir');
   });
 
   it('does not include yespapa itself', () => {

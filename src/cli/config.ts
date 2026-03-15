@@ -17,7 +17,7 @@ const CONFIG_DEFAULTS: Record<string, { default: string; description: string }> 
   default_timeout: { default: '120', description: 'Approval timeout in seconds (0 = wait forever)' },
   allow_sudo_bypass: { default: 'true', description: 'Auto-approve sudo commands (false = require TOTP)' },
   allow_remote_exec: { default: 'false', description: 'Enable yespapa exec for programmatic access' },
-  headless_action: { default: 'allow', description: 'Action when no terminal is available: allow, block, or log_only' },
+  headless_action: { default: 'approve', description: 'Action when no terminal is available: approve (poll for approval), allow (bypass), block, or log_only' },
 };
 
 /**
@@ -42,8 +42,8 @@ export function validateConfigValue(key: string, value: string): string | null {
       return null;
     }
     case 'headless_action': {
-      if (!['allow', 'block', 'log_only'].includes(value)) {
-        return `Invalid value for headless_action: "${value}"\n  Expected: allow, block, or log_only`;
+      if (!['approve', 'allow', 'block', 'log_only'].includes(value)) {
+        return `Invalid value for headless_action: "${value}"\n  Expected: approve, allow, block, or log_only`;
       }
       return null;
     }

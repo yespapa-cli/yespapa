@@ -47,10 +47,18 @@ describe('default deny-list (PRD §7.1)', () => {
     expect(evaluateCommand('rm', ['file.txt']).action).toBe('pass');
   });
 
-  it('denies git reset', () => {
+  it('denies git reset --hard', () => {
     const result = evaluateCommand('git', ['reset', '--hard']);
     expect(result.action).toBe('deny');
     expect(result.rule?.bundle).toBe('git-rewrite');
+  });
+
+  it('allows git reset --soft', () => {
+    expect(evaluateCommand('git', ['reset', '--soft', 'HEAD~1']).action).toBe('pass');
+  });
+
+  it('allows git reset (mixed, no --hard)', () => {
+    expect(evaluateCommand('git', ['reset', 'HEAD', 'file.txt']).action).toBe('pass');
   });
 
   it('denies git push -f', () => {
@@ -144,11 +152,11 @@ describe('custom rules via DB', () => {
 });
 
 describe('seedDefaultRules', () => {
-  it('seeds all 11 default rules', () => {
+  it('seeds all 10 default rules', () => {
     const db = openMemoryDatabase();
     seedDefaultRules(db);
     const rules = db.prepare('SELECT COUNT(*) as count FROM rules').get() as { count: number };
-    expect(rules.count).toBe(11);
+    expect(rules.count).toBe(10);
   });
 });
 

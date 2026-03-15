@@ -47,10 +47,10 @@ export const DEFAULT_DENY_RULES: DefaultRule[] = [
     match: (cmd, args) => cmd === 'rm' && (args.includes('-rf') || args.includes('-r') || args.some(a => a.startsWith('-') && a.includes('r') && a.includes('f'))),
   },
   {
-    pattern: 'git reset',
+    pattern: 'git reset --hard',
     bundle: 'git-rewrite',
-    reason: 'History rewrite',
-    match: (cmd, args) => cmd === 'git' && args[0] === 'reset',
+    reason: 'Hard reset — destroys uncommitted changes',
+    match: (cmd, args) => cmd === 'git' && args[0] === 'reset' && args.includes('--hard'),
   },
   {
     pattern: 'git push -f',
@@ -101,12 +101,6 @@ export const DEFAULT_DENY_RULES: DefaultRule[] = [
     bundle: 'process',
     reason: 'Force-kill process',
     match: (cmd, args) => cmd === 'kill' && (args.includes('-9') || args.includes('-SIGKILL')),
-  },
-  {
-    pattern: 'rmdir',
-    bundle: 'destructive',
-    reason: 'Directory removal',
-    match: (cmd) => cmd === 'rmdir',
   },
 ];
 

@@ -16,7 +16,7 @@ const FISH_CONF_DIR_NAME = '.config/fish/conf.d';
  * Used for cleanup during uninstall.
  */
 export const INTERCEPTOR_FUNCTIONS = [
-  'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill', 'rmdir',
+  'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill',
   'yespapa_intercept', '_yp_intercept_inner', '_yp_exec', 'yespapa_send', 'yespapa_json_field',
 ];
 
@@ -25,7 +25,7 @@ export const INTERCEPTOR_FUNCTIONS = [
  * These wrappers intercept commands in non-interactive shells (scripts, cron, subprocesses).
  * Each entry maps command name -> real binary path (resolved at install time).
  */
-export const WRAPPER_COMMANDS = ['rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill', 'rmdir'];
+export const WRAPPER_COMMANDS = ['rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill'];
 
 /**
  * Resolve the absolute path of a real binary, skipping any yespapa wrappers.
@@ -107,7 +107,7 @@ fi
 if [ "$_yp_status" = "needs_totp" ]; then
   # In non-interactive mode, check headless_action config
   if [ ! -t 0 ]; then
-    _yp_headless="allow"
+    _yp_headless="approve"
     if [ -f "$HOME/.yespapa/headless_action" ]; then
       _yp_headless=$(cat "$HOME/.yespapa/headless_action" 2>/dev/null)
     fi
@@ -118,14 +118,82 @@ if [ "$_yp_status" = "needs_totp" ]; then
         unset _YP_INTERCEPTING
         exit 1
         ;;
+      allow)
+        echo "[YesPaPa] ✓ Approved (no terminal — headless bypass)" >&2
+        unset _YP_INTERCEPTING
+        exec "${realBinaryPath}" "$@"
+        ;;
       log_only)
         unset _YP_INTERCEPTING
         exec "${realBinaryPath}" "$@"
         ;;
-      *)
-        echo "[YesPaPa] ✓ Approved (no terminal — headless bypass)" >&2
+      approve|*)
+        # Poll for remote/terminal approval (no TOTP prompt — no TTY)
+        _yp_id=""
+        _yp_rule=""
+        _yp_timeout=""
+        if command -v python3 >/dev/null 2>&1; then
+          _yp_id=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('id',''))" "$_yp_response" 2>/dev/null)
+          _yp_rule=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('rule',''))" "$_yp_response" 2>/dev/null)
+          _yp_timeout=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('timeout','120'))" "$_yp_response" 2>/dev/null)
+        else
+          _yp_id=$(echo "$_yp_response" | sed -n 's/.*"id":"\\([^"]*\\)".*/\\1/p')
+          _yp_rule=$(echo "$_yp_response" | sed -n 's/.*"rule":"\\([^"]*\\)".*/\\1/p')
+          _yp_timeout=120
+        fi
+        _yp_timeout=\${_yp_timeout:-120}
+        _yp_max_polls=$_yp_timeout
+        if [ "$_yp_timeout" = "0" ]; then
+          _yp_max_polls=999999
+        fi
+
+        echo "" >&2
+        echo "  [YesPaPa] Command requires approval (headless): $_yp_full" >&2
+        [ -n "$_yp_rule" ] && echo "  Rule: $_yp_rule" >&2
+        echo "  ID: $_yp_id" >&2
+        echo "  Approve from another terminal: yespapa approve $_yp_id" >&2
+        echo "  Or approve from the YesPaPa mobile app." >&2
+        echo "  STATUS: PENDING — waiting for human approval..." >&2
+        echo "" >&2
+
+        _yp_poll=0
+        while [ $_yp_poll -lt $_yp_max_polls ]; do
+          sleep 1
+          _yp_poll_resp=""
+          if command -v nc >/dev/null 2>&1; then
+            _yp_poll_resp=$(printf '%s\\n' "{\\"check\\":\\"$_yp_id\\"}" | nc -U ${socketPath} 2>/dev/null)
+          fi
+          _yp_poll_status=""
+          if [ -n "$_yp_poll_resp" ]; then
+            if command -v python3 >/dev/null 2>&1; then
+              _yp_poll_status=$(python3 -c "import json,sys;d=json.loads(sys.argv[1]);print(d.get('status',''))" "$_yp_poll_resp" 2>/dev/null)
+            else
+              _yp_poll_status=$(echo "$_yp_poll_resp" | sed -n 's/.*"status":"\\([^"]*\\)".*/\\1/p')
+            fi
+          fi
+          if [ "$_yp_poll_status" = "approved" ]; then
+            echo "  [YesPaPa] Approved" >&2
+            unset _YP_INTERCEPTING
+            exec "${realBinaryPath}" "$@"
+          elif [ "$_yp_poll_status" = "denied" ]; then
+            echo "  [YesPaPa] Denied" >&2
+            unset _YP_INTERCEPTING
+            exit 1
+          fi
+
+          _yp_poll=$((_yp_poll + 1))
+          if [ "$_yp_timeout" != "0" ]; then
+            _yp_rem=$((_yp_timeout - _yp_poll))
+            if [ $((_yp_poll % 15)) -eq 0 ] && [ $_yp_rem -gt 0 ]; then
+              echo "  [YesPaPa] Still waiting for approval... (\${_yp_rem}s remaining)" >&2
+            fi
+          fi
+        done
+
+        echo "  [YesPaPa] Timed out waiting for approval (\${_yp_timeout}s)." >&2
+        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$_yp_full\\",\\"reason\\":\\"timeout\\"}" >&2
         unset _YP_INTERCEPTING
-        exec "${realBinaryPath}" "$@"
+        exit 1
         ;;
     esac
   fi
@@ -245,7 +313,7 @@ export function removeBinaryWrappers(): string[] {
 export function generateInterceptorScript(socketPath: string = SOCKET_PATH, extraCommands: string[] = []): string {
   // Generate dynamic shell functions for custom rule commands
   const extraFunctions = extraCommands
-    .filter((cmd) => !['rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill', 'rmdir'].includes(cmd))
+    .filter((cmd) => !['rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill'].includes(cmd))
     .map((cmd) => `
 ${cmd}() {
   if yespapa_intercept ${cmd} "$@"; then
@@ -371,7 +439,7 @@ _yp_intercept_inner() {
 
   # Check if we have a terminal — if not, apply headless_action policy
   if [ ! -t 0 ] || [ ! -t 1 ]; then
-    local _yp_headless="allow"
+    local _yp_headless="approve"
     if [ -f "$HOME/.yespapa/headless_action" ]; then
       _yp_headless=$(cat "$HOME/.yespapa/headless_action" 2>/dev/null)
     fi
@@ -381,12 +449,76 @@ _yp_intercept_inner() {
         echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"no_terminal\\"}" >&9
         return 1
         ;;
+      allow)
+        echo "[YesPaPa] ✓ Approved (no terminal — headless bypass)" >&9
+        return 0
+        ;;
       log_only)
         return 0
         ;;
-      *)
-        echo "[YesPaPa] ✓ Approved (no terminal — headless bypass)" >&9
-        return 0
+      approve|*)
+        # Poll for remote/terminal approval (no TOTP prompt — no TTY available)
+        local _yp_hcmd_id _yp_hrule _yp_htimeout
+        _yp_hcmd_id=$(yespapa_json_field "$response" "id")
+        _yp_hrule=$(yespapa_json_field "$response" "rule")
+        _yp_htimeout=$(yespapa_json_field "$response" "timeout")
+        _yp_htimeout=\${_yp_htimeout:-120}
+        local _yp_hmax_polls=$_yp_htimeout
+        if [ "$_yp_htimeout" = "0" ]; then
+          _yp_hmax_polls=999999
+        fi
+
+        echo "" >&9
+        echo "  ┌─────────────────────────────────────────────────────────────────┐" >&9
+        echo "  │  YesPaPa — Waiting for Human Approval (headless)               │" >&9
+        echo "  ├─────────────────────────────────────────────────────────────────┤" >&9
+        echo "  │  Command: $full_cmd" >&9
+        if [ -n "$_yp_hrule" ]; then
+          echo "  │  Rule:    $_yp_hrule" >&9
+        fi
+        echo "  │  ID:      $_yp_hcmd_id" >&9
+        echo "  ├─────────────────────────────────────────────────────────────────┤" >&9
+        echo "  │  STATUS: PENDING — the human owner has been notified.          │" >&9
+        echo "  │                                                                │" >&9
+        echo "  │  Approve from another terminal:                                │" >&9
+        echo "  │    yespapa approve $_yp_hcmd_id" >&9
+        echo "  │                                                                │" >&9
+        echo "  │  Or approve from the YesPaPa mobile app.                      │" >&9
+        echo "  │                                                                │" >&9
+        echo "  │  >>> DO NOT close this process, retry, or work around it. <<<  │" >&9
+        echo "  └─────────────────────────────────────────────────────────────────┘" >&9
+        echo "" >&9
+
+        local _yp_hpoll=0
+        while [ $_yp_hpoll -lt $_yp_hmax_polls ]; do
+          sleep 1
+          local _yp_hresp _yp_hstatus _yp_hmsg
+          _yp_hresp=$(yespapa_send "{\\"check\\":\\"$_yp_hcmd_id\\"}")
+          _yp_hstatus=$(yespapa_json_field "$_yp_hresp" "status")
+          if [ "$_yp_hstatus" = "approved" ]; then
+            _yp_hmsg=$(yespapa_json_field "$_yp_hresp" "message")
+            echo "  [YesPaPa] Approved\${_yp_hmsg:+: $_yp_hmsg}" >&9
+            echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$_yp_hcmd_id\\"}" >&9
+            return 0
+          elif [ "$_yp_hstatus" = "denied" ]; then
+            _yp_hmsg=$(yespapa_json_field "$_yp_hresp" "message")
+            echo "  [YesPaPa] Denied\${_yp_hmsg:+: $_yp_hmsg}" >&9
+            echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$_yp_hcmd_id\\"}" >&9
+            return 1
+          fi
+
+          _yp_hpoll=$((_yp_hpoll + 1))
+          if [ "$_yp_htimeout" != "0" ]; then
+            local _yp_hrem=$((_yp_htimeout - _yp_hpoll))
+            if [ $((_yp_hpoll % 15)) -eq 0 ] && [ $_yp_hrem -gt 0 ]; then
+              echo "  [YesPaPa] Still waiting for approval... (\${_yp_hrem}s remaining)" >&9
+            fi
+          fi
+        done
+
+        echo "  [YesPaPa] Timed out waiting for approval (\${_yp_htimeout}s)." >&9
+        echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"timeout\\",\\"hint\\":\\"The human did not respond in time. Ask the user to approve faster or increase the timeout.\\",\\"id\\":\\"$_yp_hcmd_id\\"}" >&9
+        return 1
         ;;
     esac
   fi
@@ -525,9 +657,14 @@ rm() {
 git() {
   case "$1" in
     reset)
-      if yespapa_intercept git "$@"; then
-        _yp_exec git "$@"
-      fi
+      case "$*" in
+        *--hard*)
+          if yespapa_intercept git "$@"; then
+            _yp_exec git "$@"
+          fi
+          ;;
+        *) _YP_INTERCEPTING=1 command git "$@" ;;
+      esac
       ;;
     push)
       case "$*" in
@@ -583,11 +720,6 @@ kill() {
   esac
 }
 
-rmdir() {
-  if yespapa_intercept rmdir "$@"; then
-    _yp_exec rmdir "$@"
-  fi
-}
 ${extraFunctions}
 # Auto-start daemon if not running
 if [ -S "${socketPath}" ]; then

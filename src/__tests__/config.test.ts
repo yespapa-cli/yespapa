@@ -47,6 +47,10 @@ describe('validateConfigValue', () => {
   });
 
   describe('headless_action', () => {
+    it('accepts "approve"', () => {
+      expect(validateConfigValue('headless_action', 'approve')).toBeNull();
+    });
+
     it('accepts "allow"', () => {
       expect(validateConfigValue('headless_action', 'allow')).toBeNull();
     });
@@ -62,7 +66,7 @@ describe('validateConfigValue', () => {
     it('rejects "deny"', () => {
       const error = validateConfigValue('headless_action', 'deny');
       expect(error).toContain('Invalid value');
-      expect(error).toContain('allow, block, or log_only');
+      expect(error).toContain('approve, allow, block, or log_only');
     });
 
     it('rejects "true"', () => {
