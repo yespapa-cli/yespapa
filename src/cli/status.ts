@@ -5,6 +5,7 @@ import { existsSync } from 'node:fs';
 import { openDatabase, getConfig, getPendingCommands, getRecentCommands, getActiveGracePeriods } from '../db/index.js';
 import { isInterceptorInstalled } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
+import { green, red, cyan, bold, dim } from './color.js';
 
 const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
 
@@ -27,28 +28,29 @@ export const statusCommand = new Command('status')
     const graceActive = getActiveGracePeriods(db);
     const recent = getRecentCommands(db, 5);
 
-    console.log('\n🔒 YesPaPa Status\n');
-    console.log(`  Host:          ${hostId}`);
-    console.log(`  Daemon:        ${daemonRunning ? '✓ running' : '✗ stopped'} (PID: ${daemonPid ?? 'none'})`);
-    console.log(`  Socket:        ${socketExists ? '✓ active' : '✗ not found'} (${SOCKET_PATH})`);
-    console.log(`  Interceptor:   ${interceptorInstalled ? '✓ installed' : '✗ not installed'}`);
+    console.log(`\n${bold('  YesPaPa Status')}\n`);
+    console.log(`  Host:          ${cyan(hostId)}`);
+    console.log(`  Daemon:        ${daemonRunning ? green('✓ running') : red('✗ stopped')} ${dim(`(PID: ${daemonPid ?? 'none'})`)}`);
+    console.log(`  Socket:        ${socketExists ? green('✓ active') : red('✗ not found')} ${dim(`(${SOCKET_PATH})`)}`);
+    console.log(`  Interceptor:   ${interceptorInstalled ? green('✓ installed') : red('✗ not installed')}`);
     const remoteUrl = getConfig(db, 'remote_url');
     const remoteHostId = getConfig(db, 'remote_host_id');
     const channelCount = getConfig(db, 'realtime_channels');
     if (remoteUrl && remoteHostId) {
       const channelInfo = channelCount ? `, ${channelCount} channel(s)` : '';
-      console.log(`  Remote:        ✓ configured (host: ${remoteHostId}${channelInfo})`);
+      console.log(`  Remote:        ${green('✓ configured')} ${dim(`(host: ${remoteHostId}${channelInfo})`)}`);
     } else {
-      console.log(`  Remote:        offline (not configured)`);
+      console.log(`  Remote:        ${dim('offline (not configured)')}`);
     }
-    console.log(`  Pending:       ${pending.length} command(s)`);
-    console.log(`  Auto-bypass:   ${graceActive.length} active`);
+    console.log(`  Pending:       ${pending.length > 0 ? cyan(String(pending.length)) : '0'} command(s)`);
+    console.log(`  Auto-bypass:   ${graceActive.length > 0 ? cyan(String(graceActive.length)) : '0'} active`);
 
     if (recent.length > 0) {
-      console.log('\n  Recent commands:');
+      console.log(`\n  ${bold('Recent commands:')}`);
       for (const cmd of recent) {
-        const icon = cmd.status === 'approved' || cmd.status === 'grace' ? '✓' : '✗';
-        console.log(`    ${icon} [${cmd.status}] ${cmd.command.slice(0, 50)} (${cmd.id})`);
+        const approved = cmd.status === 'approved' || cmd.status === 'grace';
+        const icon = approved ? green('✓') : red('✗');
+        console.log(`    ${icon} [${cmd.status}] ${cmd.command.slice(0, 50)} ${dim(`(${cmd.id})`)}`);
       }
     }
 

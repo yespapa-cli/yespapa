@@ -6,6 +6,7 @@ import { createConnection } from 'node:net';
 import { openDatabase, getConfig } from '../db/index.js';
 import { isInterceptorInstalled, WRAPPER_COMMANDS } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
+import { green, red, yellow, bold } from './color.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
@@ -20,7 +21,7 @@ interface Check {
 export const doctorCommand = new Command('doctor')
   .description('Check all components and report issues')
   .action(async () => {
-    console.log('\n  YesPaPa Doctor\n');
+    console.log(`\n  ${bold('YesPaPa Doctor')}\n`);
     const checks: Check[] = [];
 
     // 1. Node.js version
@@ -152,7 +153,11 @@ export const doctorCommand = new Command('doctor')
     let failCount = 0;
     let warnCount = 0;
     for (const check of checks) {
-      const icon = check.status === 'ok' ? '  [ok]  ' : check.status === 'warn' ? '  [!!]  ' : '  [FAIL]';
+      const icon = check.status === 'ok'
+        ? green('  [ok]  ')
+        : check.status === 'warn'
+          ? yellow('  [!!]  ')
+          : red('  [FAIL]');
       console.log(`${icon} ${check.name}: ${check.detail}`);
       if (check.status === 'fail') failCount++;
       if (check.status === 'warn') warnCount++;
@@ -160,12 +165,12 @@ export const doctorCommand = new Command('doctor')
 
     console.log('');
     if (failCount > 0) {
-      console.log(`  ${failCount} issue(s) found. Run "yespapa init" to fix.\n`);
+      console.log(red(`  ${failCount} issue(s) found. Run "yespapa init" to fix.\n`));
       process.exit(1);
     } else if (warnCount > 0) {
-      console.log(`  All critical checks passed. ${warnCount} warning(s).\n`);
+      console.log(yellow(`  All critical checks passed. ${warnCount} warning(s).\n`));
     } else {
-      console.log('  All checks passed.\n');
+      console.log(green('  All checks passed.\n'));
     }
   });
 
