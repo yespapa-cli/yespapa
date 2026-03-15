@@ -18,6 +18,32 @@ const CONFIG_DEFAULTS: Record<string, { default: string; description: string }> 
   allow_remote_exec: { default: 'false', description: 'Enable yespapa exec for programmatic access' },
 };
 
+/**
+ * Validate a config value for a given key.
+ * Returns null if valid, or an error message string if invalid.
+ */
+export function validateConfigValue(key: string, value: string): string | null {
+  switch (key) {
+    case 'default_timeout': {
+      const num = Number(value);
+      if (!Number.isInteger(num) || num < 0) {
+        return `Invalid value for default_timeout: "${value}"\n  Expected: non-negative integer (e.g., 0, 30, 120)`;
+      }
+      return null;
+    }
+    case 'allow_password_bypass':
+    case 'allow_sudo_bypass':
+    case 'allow_remote_exec': {
+      if (value !== 'true' && value !== 'false') {
+        return `Invalid value for ${key}: "${value}"\n  Expected: true or false`;
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
+}
+
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
   return new Promise((resolve) => {
     rl.question(question, (answer) => resolve(answer));
@@ -31,6 +57,12 @@ const setCommand = new Command('set')
   .action(async (key: string, value: string) => {
     if (!ALLOWED_KEYS.includes(key)) {
       console.log(`Unknown config key: ${key}. Allowed: ${ALLOWED_KEYS.join(', ')}`);
+      process.exit(1);
+    }
+
+    const validationError = validateConfigValue(key, value);
+    if (validationError) {
+      console.log(validationError);
       process.exit(1);
     }
 
