@@ -176,6 +176,16 @@ function matchesCustomRule(
   fullCommand: string | undefined,
   rule: RuleRow,
 ): boolean {
+  // For rules that match a default deny pattern, use the precise match function
+  // instead of broad substring matching (e.g., pattern "rm" would otherwise match
+  // every rm invocation, including harmless ones like "rm -f")
+  const defaultRule = DEFAULT_DENY_RULES.find(
+    (dr) => dr.pattern === rule.pattern,
+  );
+  if (defaultRule) {
+    return defaultRule.match(command, args, fullCommand);
+  }
+
   const full = fullCommand ?? [command, ...args].join(' ');
   return full.includes(rule.pattern);
 }

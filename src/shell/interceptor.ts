@@ -504,7 +504,11 @@ _yp_exec() {
     if [ "$_a" = "--justification" ]; then _skip=1; continue; fi
     _args="$_args \\"$_a\\""
   done
+  export _YP_INTERCEPTING=1
   eval command "$_cmd" $_args
+  local _rc=$?
+  unset _YP_INTERCEPTING
+  return $_rc
 }
 
 rm() {
@@ -514,7 +518,7 @@ rm() {
         _yp_exec rm "$@"
       fi
       ;;
-    *) command rm "$@" ;;
+    *) _YP_INTERCEPTING=1 command rm "$@" ;;
   esac
 }
 
@@ -532,10 +536,10 @@ git() {
             _yp_exec git "$@"
           fi
           ;;
-        *) command git "$@" ;;
+        *) _YP_INTERCEPTING=1 command git "$@" ;;
       esac
       ;;
-    *) command git "$@" ;;
+    *) _YP_INTERCEPTING=1 command git "$@" ;;
   esac
 }
 
@@ -546,7 +550,7 @@ chmod() {
         _yp_exec chmod "$@"
       fi
       ;;
-    *) command chmod "$@" ;;
+    *) _YP_INTERCEPTING=1 command chmod "$@" ;;
   esac
 }
 
@@ -575,7 +579,7 @@ kill() {
         _yp_exec kill "$@"
       fi
       ;;
-    *) command kill "$@" ;;
+    *) _YP_INTERCEPTING=1 command kill "$@" ;;
   esac
 }
 
