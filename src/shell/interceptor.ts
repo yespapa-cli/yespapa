@@ -173,21 +173,23 @@ exit 1
  * These shadow real binaries so non-interactive shells are also intercepted.
  * Returns list of installed wrapper paths.
  */
-export function installBinaryWrappers(socketPath: string = SOCKET_PATH): string[] {
+export function installBinaryWrappers(socketPath: string = SOCKET_PATH, extraCommands: string[] = []): string[] {
   if (!existsSync(BIN_DIR)) {
     mkdirSync(BIN_DIR, { recursive: true });
   }
 
+  // Combine default wrapper commands with custom rule commands
+  const allCommands = [...new Set([...WRAPPER_COMMANDS, ...extraCommands])];
+
   const installed: string[] = [];
-  for (const cmd of WRAPPER_COMMANDS) {
+  for (const cmd of allCommands) {
+    // Don't overwrite the yespapa CLI wrapper
+    if (cmd === 'yespapa') continue;
+
     const realPath = resolveRealBinary(cmd);
     if (!realPath) continue; // Command not available on this system
 
     const wrapperPath = join(BIN_DIR, cmd);
-
-    // Don't overwrite the yespapa CLI wrapper
-    if (cmd === 'yespapa') continue;
-
     const script = generateWrapperScript(cmd, realPath, socketPath);
     writeFileSync(wrapperPath, script, { mode: 0o755 });
     installed.push(wrapperPath);
@@ -216,8 +218,22 @@ export function removeBinaryWrappers(): string[] {
 /**
  * Generate the shell interceptor script.
  * Two-phase protocol: daemon returns needs_totp, interceptor prompts user, sends TOTP back.
+ *
+ * @param socketPath - Unix socket path for daemon communication
+ * @param extraCommands - Additional command names to wrap (from custom rules in the DB)
  */
-export function generateInterceptorScript(socketPath: string = SOCKET_PATH): string {
+export function generateInterceptorScript(socketPath: string = SOCKET_PATH, extraCommands: string[] = []): string {
+  // Generate dynamic shell functions for custom rule commands
+  const extraFunctions = extraCommands
+    .filter((cmd) => !['rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill', 'rmdir'].includes(cmd))
+    .map((cmd) => `
+${cmd}() {
+  if yespapa_intercept ${cmd} "$@"; then
+    _yp_exec ${cmd} "$@"
+  fi
+}`)
+    .join('\n');
+
   return `#!/bin/sh
 # YesPaPa Shell Interceptor — DO NOT EDIT
 # This file is managed by yespapa. Changes will be overwritten.
@@ -520,7 +536,7 @@ rmdir() {
     _yp_exec rmdir "$@"
   fi
 }
-
+${extraFunctions}
 # Auto-start daemon if not running
 if [ -S "${socketPath}" ]; then
   : # Socket exists, daemon likely running
@@ -618,8 +634,8 @@ set -gx PATH "$HOME/.yespapa/bin" $PATH
  * Write the interceptor script to ~/.yespapa/interceptor.sh
  * and add a single source line to shell profiles.
  */
-export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
-  const script = generateInterceptorScript(socketPath);
+export function injectInterceptor(socketPath: string = SOCKET_PATH, extraCommands: string[] = []): string[] {
+  const script = generateInterceptorScript(socketPath, extraCommands);
 
   // Ensure ~/.yespapa/ exists
   if (!existsSync(YESPAPA_DIR)) {
@@ -692,7 +708,7 @@ export function injectInterceptor(socketPath: string = SOCKET_PATH): string[] {
   }
 
   // Install PATH-based binary wrappers for non-interactive shell coverage
-  installBinaryWrappers(socketPath);
+  installBinaryWrappers(socketPath, extraCommands);
 
   return injected;
 }
@@ -785,6 +801,21 @@ export function deleteInterceptorFile(): void {
   if (existsSync(INTERCEPTOR_PATH)) {
     unlinkSync(INTERCEPTOR_PATH);
   }
+}
+
+/**
+ * Extract unique base command names from rule patterns.
+ * E.g., "docker rm" -> "docker", "npm publish" -> "npm", "rm" -> "rm"
+ */
+export function extractCommandNames(patterns: string[]): string[] {
+  const commands = new Set<string>();
+  for (const pattern of patterns) {
+    const baseCmd = pattern.split(/\s+/)[0];
+    if (baseCmd && /^[a-zA-Z0-9._-]+$/.test(baseCmd)) {
+      commands.add(baseCmd);
+    }
+  }
+  return [...commands];
 }
 
 function escapeRegex(str: string): string {

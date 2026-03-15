@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateInterceptorScript, WRAPPER_COMMANDS } from '../shell/interceptor.js';
+import { generateInterceptorScript, WRAPPER_COMMANDS, extractCommandNames } from '../shell/interceptor.js';
 
 describe('shell interceptor generation', () => {
   const script = generateInterceptorScript('/tmp/yespapa-test.sock');
@@ -78,5 +78,42 @@ describe('WRAPPER_COMMANDS', () => {
 
   it('does not include yespapa itself', () => {
     expect(WRAPPER_COMMANDS).not.toContain('yespapa');
+  });
+});
+
+describe('extractCommandNames', () => {
+  it('extracts base command from simple patterns', () => {
+    expect(extractCommandNames(['docker', 'npm'])).toEqual(['docker', 'npm']);
+  });
+
+  it('extracts base command from multi-word patterns', () => {
+    expect(extractCommandNames(['docker rm', 'npm publish'])).toEqual(['docker', 'npm']);
+  });
+
+  it('deduplicates commands', () => {
+    expect(extractCommandNames(['docker rm', 'docker build'])).toEqual(['docker']);
+  });
+
+  it('skips patterns that are not valid command names', () => {
+    expect(extractCommandNames(['curl | bash', 'wget | sh'])).toEqual(['curl', 'wget']);
+  });
+});
+
+describe('dynamic extra command wrappers', () => {
+  it('generates shell functions for extra commands', () => {
+    const script = generateInterceptorScript('/tmp/test.sock', ['docker', 'terraform']);
+    expect(script).toContain('docker()');
+    expect(script).toContain('terraform()');
+    expect(script).toContain('yespapa_intercept docker');
+    expect(script).toContain('yespapa_intercept terraform');
+  });
+
+  it('does not duplicate built-in wrapper functions', () => {
+    const script = generateInterceptorScript('/tmp/test.sock', ['rm', 'docker']);
+    // 'rm' should appear as the built-in wrapper, not duplicated
+    const rmMatches = script.match(/^rm\(\)/gm);
+    expect(rmMatches?.length).toBe(1);
+    // 'docker' should appear as an extra wrapper
+    expect(script).toContain('docker()');
   });
 });

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { existsSync } from 'node:fs';
 import { openDatabase, getRules, addRule, removeRule } from '../db/index.js';
 import { DEFAULT_DENY_RULES } from '../rules/index.js';
-import { injectInterceptor } from '../shell/interceptor.js';
+import { injectInterceptor, extractCommandNames } from '../shell/interceptor.js';
 
 const DB_PATH = join(homedir(), '.yespapa', 'yespapa.db');
 
@@ -69,8 +69,10 @@ const addCommand = new Command('add')
       console.log(`Added rule: ${options.action} "${options.pattern}"`);
     }
 
-    // Regenerate interceptor
-    injectInterceptor();
+    // Regenerate interceptor with all custom rule commands
+    const allRules = getRules(db);
+    const customCmds = extractCommandNames(allRules.map((r) => r.pattern));
+    injectInterceptor(undefined, customCmds);
     console.log('Shell interceptor updated.');
     db.close();
   });
@@ -83,7 +85,9 @@ const removeCommand = new Command('remove')
 
     if (removeRule(db, options.pattern)) {
       console.log(`Removed rule: "${options.pattern}"`);
-      injectInterceptor();
+      const allRules = getRules(db);
+      const customCmds = extractCommandNames(allRules.map((r) => r.pattern));
+      injectInterceptor(undefined, customCmds);
       console.log('Shell interceptor updated.');
     } else {
       console.log(`No rule found with pattern: "${options.pattern}"`);
