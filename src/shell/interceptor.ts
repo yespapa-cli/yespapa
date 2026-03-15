@@ -13,7 +13,7 @@ const SOURCE_LINE = '[ -f ~/.yespapa/interceptor.sh ] && source ~/.yespapa/inter
  */
 export const INTERCEPTOR_FUNCTIONS = [
   'rm', 'git', 'chmod', 'sudo', 'dd', 'mkfs', 'kill',
-  'yespapa_intercept', '_yp_intercept_inner', 'yespapa_send', 'yespapa_json_field',
+  'yespapa_intercept', '_yp_intercept_inner', '_yp_exec', 'yespapa_send', 'yespapa_json_field',
 ];
 
 /**
@@ -78,20 +78,44 @@ _yp_intercept_inner() {
   local full_cmd="$*"
   local cmd_name="$1"
   shift
+
+  # Extract --justification from args (if present)
+  local justification=""
+  local clean_args=""
+  local skip_next=0
+  for arg in "$@"; do
+    if [ $skip_next -eq 1 ]; then
+      justification="$arg"
+      skip_next=0
+      continue
+    fi
+    if [ "$arg" = "--justification" ]; then
+      skip_next=1
+      continue
+    fi
+    clean_args="$clean_args $arg"
+  done
+  # Re-set positional params to cleaned args (without --justification)
+  eval set -- $clean_args
+
   local args_json=""
   local first=1
   for arg in "$@"; do
     if [ $first -eq 1 ]; then first=0; else args_json="$args_json,"; fi
     args_json="$args_json\\"$arg\\""
   done
-  local json="{\\"command\\":\\"$cmd_name\\",\\"args\\":[$args_json],\\"fullCommand\\":\\"$full_cmd\\"}"
+  local json="{\\"command\\":\\"$cmd_name\\",\\"args\\":[$args_json],\\"fullCommand\\":\\"$full_cmd\\""
+  if [ -n "$justification" ]; then
+    json="$json,\\"justification\\":\\"$justification\\""
+  fi
+  json="$json}"
 
   # Phase 1: Send command to daemon
   local response
   response=$(yespapa_send "$json")
   if [ -z "$response" ]; then
     echo "[YesPaPa] Daemon not running. Command blocked for safety." >&9
-    [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&9
+    echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&9
     return 1
   fi
 
@@ -108,7 +132,7 @@ _yp_intercept_inner() {
 
   if [ "$yp_status" != "needs_totp" ]; then
     echo "[YesPaPa] Command denied: $yp_message" >&9
-    [ -n "$YESPAPA_DEBUG" ] && echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&9
+    echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"$yp_message\\"}" >&9
     return 1
   fi
 
@@ -210,11 +234,23 @@ _yp_intercept_inner() {
   return 1
 }
 
+# Execute command after stripping --justification from args
+_yp_exec() {
+  local _cmd="$1"; shift
+  local _skip=0 _args=""
+  for _a in "$@"; do
+    if [ $_skip -eq 1 ]; then _skip=0; continue; fi
+    if [ "$_a" = "--justification" ]; then _skip=1; continue; fi
+    _args="$_args \\"$_a\\""
+  done
+  eval command "$_cmd" $_args
+}
+
 rm() {
   case "$*" in
     *-rf*|*-r*)
       if yespapa_intercept rm "$@"; then
-        command rm "$@"
+        _yp_exec rm "$@"
       fi
       ;;
     *) command rm "$@" ;;
@@ -225,14 +261,14 @@ git() {
   case "$1" in
     reset)
       if yespapa_intercept git "$@"; then
-        command git "$@"
+        _yp_exec git "$@"
       fi
       ;;
     push)
       case "$*" in
         *-f*|*--force*)
           if yespapa_intercept git "$@"; then
-            command git "$@"
+            _yp_exec git "$@"
           fi
           ;;
         *) command git "$@" ;;
@@ -246,7 +282,7 @@ chmod() {
   case "$*" in
     *777*|*o+w*)
       if yespapa_intercept chmod "$@"; then
-        command chmod "$@"
+        _yp_exec chmod "$@"
       fi
       ;;
     *) command chmod "$@" ;;
@@ -255,19 +291,19 @@ chmod() {
 
 sudo() {
   if yespapa_intercept sudo "$@"; then
-    command sudo "$@"
+    _yp_exec sudo "$@"
   fi
 }
 
 dd() {
   if yespapa_intercept dd "$@"; then
-    command dd "$@"
+    _yp_exec dd "$@"
   fi
 }
 
 mkfs() {
   if yespapa_intercept mkfs "$@"; then
-    command mkfs "$@"
+    _yp_exec mkfs "$@"
   fi
 }
 
@@ -275,7 +311,7 @@ kill() {
   case "$*" in
     *-9*|*-SIGKILL*)
       if yespapa_intercept kill "$@"; then
-        command kill "$@"
+        _yp_exec kill "$@"
       fi
       ;;
     *) command kill "$@" ;;
