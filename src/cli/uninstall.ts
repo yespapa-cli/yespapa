@@ -8,7 +8,16 @@ import { verifyPassword } from '../crypto/index.js';
 import { removeInterceptor, INTERCEPTOR_FUNCTIONS } from '../shell/interceptor.js';
 import { SOCKET_PATH } from '../daemon/socket.js';
 
-const YESPAPA_DIR = join(homedir(), '.yespapa');
+function resolveHome(): string {
+  // When running under sudo, homedir() returns root's home — use the original user's instead
+  const sudoUser = process.env['SUDO_USER'];
+  if (process.getuid?.() === 0 && sudoUser) {
+    return join(process.platform === 'darwin' ? '/Users' : '/home', sudoUser);
+  }
+  return homedir();
+}
+
+const YESPAPA_DIR = join(resolveHome(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');
 
 function prompt(rl: ReturnType<typeof createInterface>, question: string): Promise<string> {
@@ -30,54 +39,34 @@ export const uninstallCommand = new Command('uninstall')
 
     try {
       console.log('\n🔒 YesPaPa — Uninstall\n');
-      console.log('Authentication required to uninstall.\n');
 
-      const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
-      const input = await prompt(rl, 'Enter TOTP code or master key: ');
+      // Running as root (sudo) bypasses authentication — root can rm -rf ~/.yespapa anyway
+      const isRoot = process.getuid?.() === 0;
 
-      let authenticated = false;
+      if (isRoot) {
+        console.log('Running as root — skipping authentication.\n');
+      } else {
+        console.log('Authentication required to uninstall.\n');
 
-      // Try as password
-      if (passwordHash) {
-        authenticated = await verifyPassword(input, passwordHash);
-      }
+        const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
+        const input = await prompt(rl, 'Enter TOTP code or master key: ');
 
-      // Try as TOTP via daemon if password didn't match
-      if (!authenticated) {
-        try {
-          const { createConnection } = await import('node:net');
-          const resp = await new Promise<string>((resolve, reject) => {
-            const client = createConnection(SOCKET_PATH);
-            let buffer = '';
-            // We need to send a dummy command first, then the TOTP
-            // Instead, generate a temp command and validate
-            client.on('connect', () => {
-              // Send a command to get an ID, then validate TOTP
-              client.write(JSON.stringify({ command: '__uninstall_check', args: [], fullCommand: '__uninstall_check' }) + '\n');
-            });
-            client.on('data', (data) => {
-              buffer += data.toString();
-              const lines = buffer.split('\n');
-              for (const line of lines) {
-                if (line.trim()) {
-                  client.end();
-                  resolve(line);
-                  return;
-                }
-              }
-            });
-            client.on('error', () => reject(new Error('no daemon')));
-            setTimeout(() => { client.end(); reject(new Error('timeout')); }, 3000);
-          });
+        let authenticated = false;
 
-          const parsed = JSON.parse(resp);
-          if (parsed.status === 'needs_totp') {
-            // Send TOTP
-            const totpResp = await new Promise<string>((resolve, reject) => {
+        // Try as password
+        if (passwordHash) {
+          authenticated = await verifyPassword(input, passwordHash);
+        }
+
+        // Try as TOTP via daemon if password didn't match
+        if (!authenticated) {
+          try {
+            const { createConnection } = await import('node:net');
+            const resp = await new Promise<string>((resolve, reject) => {
               const client = createConnection(SOCKET_PATH);
               let buffer = '';
               client.on('connect', () => {
-                client.write(JSON.stringify({ totp: input.trim(), id: parsed.id }) + '\n');
+                client.write(JSON.stringify({ command: '__uninstall_check', args: [], fullCommand: '__uninstall_check' }) + '\n');
               });
               client.on('data', (data) => {
                 buffer += data.toString();
@@ -94,21 +83,46 @@ export const uninstallCommand = new Command('uninstall')
               setTimeout(() => { client.end(); reject(new Error('timeout')); }, 3000);
             });
 
-            const totpParsed = JSON.parse(totpResp);
-            authenticated = totpParsed.status === 'approved';
+            const parsed = JSON.parse(resp);
+            if (parsed.status === 'needs_totp') {
+              // Send TOTP
+              const totpResp = await new Promise<string>((resolve, reject) => {
+                const client = createConnection(SOCKET_PATH);
+                let buffer = '';
+                client.on('connect', () => {
+                  client.write(JSON.stringify({ totp: input.trim(), id: parsed.id }) + '\n');
+                });
+                client.on('data', (data) => {
+                  buffer += data.toString();
+                  const lines = buffer.split('\n');
+                  for (const line of lines) {
+                    if (line.trim()) {
+                      client.end();
+                      resolve(line);
+                      return;
+                    }
+                  }
+                });
+                client.on('error', () => reject(new Error('no daemon')));
+                setTimeout(() => { client.end(); reject(new Error('timeout')); }, 3000);
+              });
+
+              const totpParsed = JSON.parse(totpResp);
+              authenticated = totpParsed.status === 'approved';
+            }
+          } catch {
+            // Daemon not running — TOTP validation not possible without daemon
           }
-        } catch {
-          // Daemon not running — TOTP validation not possible without daemon
         }
-      }
 
-      if (!authenticated) {
-        console.log('\n✗ Invalid TOTP code or password. Uninstall blocked.');
-        console.log('  This attempt has been logged as a potential tampering event.\n');
-        process.exit(1);
-      }
+        if (!authenticated) {
+          console.log('\n✗ Invalid TOTP code or password. Uninstall blocked.');
+          console.log('  This attempt has been logged as a potential tampering event.\n');
+          process.exit(1);
+        }
 
-      console.log('\n✓ Authentication successful. Uninstalling...\n');
+        console.log('\n✓ Authentication successful. Uninstalling...\n');
+      }
 
       // Stop daemon FIRST to prevent heartbeat from re-injecting interceptor
       const daemonPid = getConfig(db, 'daemon_pid');
