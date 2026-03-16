@@ -75,17 +75,43 @@ export const testCommand = new Command('test')
       process.exit(1);
     }
 
-    console.log('\n  ✓ All checks passed!\n');
-    console.log('  Check your phone:');
-    console.log('    - You should see a push notification (if push token is registered)');
-    console.log('    - Open the app → Command Queue to see the test command');
-    console.log('    - Try approving or denying it\n');
+    console.log('\n  ✓ Command sent! Waiting for response from mobile app...');
+    console.log('    Approve or deny from your phone (timeout: 60s)\n');
 
-    // Note: Polling for resolution removed since we no longer expose raw Supabase client.
-    // The daemon handles resolution via Realtime. For testing, manual verification is sufficient.
-    console.log('  The daemon will receive the response via Realtime.');
-    console.log('  Run "yespapa status" to verify.\n');
+    // Subscribe to Realtime and wait for approval/denial
+    const result = await new Promise<{ status: string; message?: string } | null>((resolve) => {
+      const timeout = setTimeout(() => {
+        sub.unsubscribe();
+        resolve(null);
+      }, 60_000);
 
+      const sub = remote.subscribeToHostEvents(remoteHostId, {
+        onCommandUpdate: (update) => {
+          if (update.id === testId && (update.status === 'approved' || update.status === 'denied')) {
+            clearTimeout(timeout);
+            sub.unsubscribe();
+            resolve({ status: update.status, message: update.message });
+          }
+        },
+        onStatusChange: (status, err) => {
+          if (err) {
+            console.log(`     ⚠ Realtime: ${status} — ${err.message}`);
+          }
+        },
+      });
+    });
+
+    if (result) {
+      const icon = result.status === 'approved' ? '✓' : '✗';
+      const label = result.status === 'approved' ? 'Approved' : 'Denied';
+      console.log(`  ${icon} ${label}${result.message ? `: ${result.message}` : ''}`);
+      console.log('\n  ✓ End-to-end connectivity verified!\n');
+    } else {
+      console.log('  ✗ Timed out — no response received in 60s.');
+      console.log('    Check that the mobile app is open and connected.\n');
+    }
+
+    remote.removeAllSubscriptions();
     db.close();
-    process.exit(0);
+    process.exit(result ? 0 : 1);
   });
