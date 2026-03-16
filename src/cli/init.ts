@@ -1,10 +1,9 @@
 import { Command } from 'commander';
 import { createInterface } from 'node:readline';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { homedir, hostname } from 'node:os';
-import { existsSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
-import { spawn } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { spawn, execSync } from 'node:child_process';
 import { generateSeed, validateCode } from '../totp/index.js';
 import { displayTotpQR } from '../totp/qr.js';
 import { openDatabase, setConfig } from '../db/index.js';
@@ -38,6 +37,37 @@ function promptPassword(rl: ReturnType<typeof createInterface>, question: string
   });
 }
 
+/**
+ * Check if yespapa is installed globally. Returns the global bin path if found, null otherwise.
+ */
+function getGlobalBinPath(): string | null {
+  try {
+    const result = execSync('npm ls -g yespapa --depth=0 --json 2>/dev/null', { encoding: 'utf-8' });
+    const parsed = JSON.parse(result);
+    if (parsed.dependencies?.yespapa) {
+      // Get the actual global bin path
+      const binPath = execSync('which yespapa 2>/dev/null || where yespapa 2>/dev/null', { encoding: 'utf-8' }).trim();
+      return binPath || null;
+    }
+  } catch {
+    // Not installed globally
+  }
+  return null;
+}
+
+/**
+ * Install yespapa globally via npm. Returns the global bin path.
+ */
+function installGlobally(): string {
+  console.log('  Installing yespapa globally...');
+  execSync('npm install -g yespapa', { stdio: 'inherit' });
+  const binPath = execSync('which yespapa 2>/dev/null || where yespapa 2>/dev/null', { encoding: 'utf-8' }).trim();
+  if (!binPath) {
+    throw new Error('Global install succeeded but yespapa binary not found in PATH');
+  }
+  return binPath;
+}
+
 export const initCommand = new Command('init')
   .description('Initialize YesPaPa on this machine')
   .option('--host-name <name>', 'Host name for this machine')
@@ -52,11 +82,27 @@ export const initCommand = new Command('init')
       process.exit(1);
     }
 
+    // Ensure yespapa is installed globally
+    let globalBin = getGlobalBinPath();
+    if (globalBin) {
+      console.log(`  ✓ yespapa is installed globally (${globalBin})`);
+    } else {
+      console.log('  yespapa is not installed globally.');
+      try {
+        globalBin = installGlobally();
+        console.log(`  ✓ yespapa installed globally (${globalBin})`);
+      } catch (err) {
+        console.error(`  ✗ Failed to install globally: ${err}`);
+        console.error('  Run "npm install -g yespapa" manually, then retry "yespapa init".');
+        process.exit(1);
+      }
+    }
+
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
       // Step 1: Generate TOTP seed (silent)
-      console.log('Step 1/5: Generating TOTP seed...');
+      console.log('\nStep 1/5: Generating TOTP seed...');
       const seed = generateSeed();
       const hostName = options.hostName ?? getDefaultHostName();
 
@@ -91,61 +137,75 @@ export const initCommand = new Command('init')
 
       if (wantsMobile) {
         // YES path: connect to remote, display combined QR, verify TOTP
-        const typeInput = await prompt(rl, 'Remote server type (supabase/selfhosted) [supabase]: ');
-        remoteType = (typeInput.trim() || 'supabase') as RemoteProviderType;
-        if (remoteType !== 'supabase' && remoteType !== 'selfhosted') {
-          console.log(`Invalid type "${remoteType}", using "supabase".`);
+        const useDefault = await prompt(rl, 'Use default remote server? (Y/n): ');
+        const isSelfHosted = useDefault.trim().toLowerCase() === 'n';
+
+        if (isSelfHosted) {
+          remoteType = 'selfhosted';
+          const urlInput = await prompt(rl, 'Remote server URL: ');
+          remoteUrl = urlInput.trim();
+          if (!remoteUrl) {
+            console.log('  ✗ URL is required for self-hosted server.');
+            console.log('  Falling back to standard TOTP QR. You can configure remote later.\n');
+            await displayTotpQR(seed, hostName);
+            // skip remote setup, jump to TOTP verification
+            remoteUrl = undefined;
+            remoteKey = undefined;
+          } else {
+            const keyInput = await prompt(rl, 'Remote server key (optional): ');
+            remoteKey = keyInput.trim() || '';
+          }
+        } else {
           remoteType = 'supabase';
+          remoteUrl = DEFAULT_REMOTE_URL;
+          remoteKey = DEFAULT_REMOTE_KEY;
         }
 
-        const urlInput = await prompt(rl, `Remote server URL [${DEFAULT_REMOTE_URL}]: `);
-        remoteUrl = urlInput.trim() || DEFAULT_REMOTE_URL;
-        const keyInput = await prompt(rl, `Remote server key [default]: `);
-        remoteKey = keyInput.trim() || DEFAULT_REMOTE_KEY;
+        if (remoteUrl) {
+          try {
+            console.log('\n  Connecting to remote server...');
+            const remote = await initializeRemote(remoteUrl, remoteKey ?? '', remoteType);
 
-        try {
-          console.log('\n  Connecting to remote server...');
-          const remote = await initializeRemote(remoteUrl, remoteKey, remoteType);
+            const { userId, refreshToken } = await authenticateAnonymous();
+            console.log('  ✓ Authenticated with remote server');
+            remoteUserId = userId;
+            remoteRefreshToken = refreshToken;
 
-          const { userId, refreshToken } = await authenticateAnonymous();
-          console.log('  ✓ Authenticated with remote server');
-          remoteUserId = userId;
-          remoteRefreshToken = refreshToken;
+            const hostRecord = await registerHost(hostName, generateHostFingerprint());
+            console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
+            remoteHostId = hostRecord.id;
 
-          const hostRecord = await registerHost(hostName, generateHostFingerprint());
-          console.log(`  ✓ Host registered (ID: ${hostRecord.id})`);
-          remoteHostId = hostRecord.id;
+            // Generate pairing data
+            const pairingToken = generatePairingToken();
+            await storePairingToken(remote, hostRecord.id, pairingToken);
+            const combinedPayload = createCombinedPayload(
+              seed, hostName, remoteUrl, remoteKey ?? '',
+              hostRecord.id, pairingToken, refreshToken,
+            );
 
-          // Generate pairing data
-          const pairingToken = generatePairingToken();
-          await storePairingToken(remote, hostRecord.id, pairingToken);
-          const combinedPayload = createCombinedPayload(
-            seed, hostName, remoteUrl, remoteKey,
-            hostRecord.id, pairingToken, refreshToken,
-          );
+            // Display 1: Standard otpauth:// QR (scannable by any authenticator)
+            console.log('\n  ── TOTP Authenticator QR ──');
+            console.log('  Scan with Google Authenticator, Authy, 1Password, or any TOTP app:\n');
+            await displayTotpQR(seed, hostName);
 
-          // Display 1: Standard otpauth:// QR (scannable by any authenticator)
-          console.log('\n  ── TOTP Authenticator QR ──');
-          console.log('  Scan with Google Authenticator, Authy, 1Password, or any TOTP app:\n');
-          await displayTotpQR(seed, hostName);
+            // Display 2: Deep-link pairing URL for YesPaPa app
+            const pairingUrl = generatePairingUrl(combinedPayload);
+            const pairingWebUrl = generatePairingWebUrl(combinedPayload);
+            const pairingQR = await generateQRString(pairingUrl);
+            console.log('  ── YesPaPa App Pairing QR ──');
+            console.log('  Scan with your phone camera to open the YesPaPa app and pair:\n');
+            console.log(pairingQR);
+            console.log(`\n  Pairing link: ${pairingWebUrl}`);
+            console.log(`\n  Can't scan? Paste this in the app: ${JSON.stringify(combinedPayload)}\n`);
+          } catch (err) {
+            console.log(`  ✗ Remote connection failed: ${err}`);
+            console.log('  Falling back to standard TOTP QR. You can configure remote later.\n');
+            remoteUrl = undefined;
+            remoteKey = undefined;
 
-          // Display 2: Deep-link pairing URL for YesPaPa app
-          const pairingUrl = generatePairingUrl(combinedPayload);
-          const pairingWebUrl = generatePairingWebUrl(combinedPayload);
-          const pairingQR = await generateQRString(pairingUrl);
-          console.log('  ── YesPaPa App Pairing QR ──');
-          console.log('  Scan with your phone camera to open the YesPaPa app and pair:\n');
-          console.log(pairingQR);
-          console.log(`\n  Pairing link: ${pairingWebUrl}`);
-          console.log(`\n  Can't scan? Paste this in the app: ${JSON.stringify(combinedPayload)}\n`);
-        } catch (err) {
-          console.log(`  ✗ Remote connection failed: ${err}`);
-          console.log('  Falling back to standard TOTP QR. You can configure remote later.\n');
-          remoteUrl = undefined;
-          remoteKey = undefined;
-
-          // Fall back to standard otpauth:// QR
-          await displayTotpQR(seed, hostName);
+            // Fall back to standard otpauth:// QR
+            await displayTotpQR(seed, hostName);
+          }
         }
       } else {
         // NO path: standard otpauth:// QR
@@ -196,18 +256,10 @@ export const initCommand = new Command('init')
       // Store daemon PID
       setConfig(db, 'daemon_pid', process.pid.toString());
 
-      // Create yespapa CLI wrapper in ~/.yespapa/bin/
-      const binDir = join(YESPAPA_DIR, 'bin');
-      if (!existsSync(binDir)) {
-        mkdirSync(binDir, { recursive: true });
-      }
-      const cliEntryPoint = join(dirname(fileURLToPath(import.meta.url)), 'index.js');
-      const wrapperScript = `#!/bin/sh\nexec node "${cliEntryPoint}" "$@"\n`;
-      const wrapperPath = join(binDir, 'yespapa');
-      writeFileSync(wrapperPath, wrapperScript);
-      chmodSync(wrapperPath, 0o755);
-      setConfig(db, 'cli_entry_point', cliEntryPoint);
-      console.log(`  ✓ CLI installed at ${wrapperPath}`);
+      // Resolve CLI entry point from the global install
+      const globalCliEntry = execSync('node -e "console.log(require.resolve(\'yespapa/dist/cli/index.js\'))"', { encoding: 'utf-8' }).trim();
+      setConfig(db, 'cli_entry_point', globalCliEntry);
+      console.log(`  ✓ CLI available globally (${globalBin})`);
 
       // Seed default rules
       seedDefaultRules(db);
@@ -227,7 +279,7 @@ export const initCommand = new Command('init')
         setConfig(db, 'remote_host_id', remoteHostId);
         if (remoteUserId) setConfig(db, 'remote_user_id', remoteUserId);
         if (remoteRefreshToken) setConfig(db, 'remote_refresh_token', remoteRefreshToken);
-        console.log(`  ✓ Remote server configured (type: ${remoteType})`);
+        console.log(`  ✓ Remote server configured (${remoteType === 'selfhosted' ? 'self-hosted' : 'default'})`);
       }
 
       // Save password for daemon auto-restart (file permissions 0600)
@@ -236,7 +288,7 @@ export const initCommand = new Command('init')
 
       // Start daemon once (remote config already in DB, no restart needed)
       db.close();
-      const daemonScript = join(dirname(fileURLToPath(import.meta.url)), '..', 'daemon', 'start.js');
+      const daemonScript = execSync('node -e "console.log(require.resolve(\'yespapa/dist/daemon/start.js\'))"', { encoding: 'utf-8' }).trim();
       const child = spawn(process.execPath, [daemonScript, password], {
         detached: true,
         stdio: 'ignore',

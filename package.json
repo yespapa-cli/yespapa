@@ -1,7 +1,7 @@
 {
   "name": "yespapa",
-  "version": "0.1.0",
-  "description": "TOTP-authenticated command gateway — intercept dangerous shell commands, require human approval",
+  "version": "0.1.1",
+  "description": "TOTP-authenticated command gateway - intercept dangerous shell commands, require human approval",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -38,7 +38,7 @@
     "type": "git",
     "url": "git+https://github.com/yespapa-cli/yespapa.git"
   },
-  "homepage": "https://github.com/yespapa-cli/yespapa#readme",
+  "homepage": "https://yespapa.io",
   "bugs": {
     "url": "https://github.com/yespapa-cli/yespapa/issues"
   },
