@@ -1,6 +1,6 @@
 {
   "name": "yespapa",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TOTP-authenticated command gateway - intercept dangerous shell commands, require human approval",
   "type": "module",
   "main": "dist/index.js",
