@@ -36,12 +36,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yespapa/yespapa.git",
-    "directory": "packages/core"
+    "url": "git+https://github.com/yespapa-cli/yespapa.git"
   },
-  "homepage": "https://github.com/yespapa/yespapa#readme",
+  "homepage": "https://github.com/yespapa-cli/yespapa#readme",
   "bugs": {
-    "url": "https://github.com/yespapa/yespapa/issues"
+    "url": "https://github.com/yespapa-cli/yespapa/issues"
   },
   "engines": {
     "node": ">=18"
