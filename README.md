@@ -51,7 +51,9 @@ Shell aliases route dangerous commands through a local daemon. The daemon checks
 ## Documentation
 
 Full docs, architecture guide, and self-hosting instructions:
-https://github.com/yespapa/yespapa
+https://docs.yespapa.io
+https://get.yespapa.app - download the YesPaPa App
+https://github.com/yespapa-cli/yespapa
 
 ## License
 

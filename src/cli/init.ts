@@ -18,7 +18,7 @@ import { generateQRString } from '../totp/qr.js';
 import type { RemoteProviderType } from '../remote/factory.js';
 
 // Default remote server (YesPaPa management server)
-const DEFAULT_REMOTE_URL = process.env.YESPAPA_DEFAULT_REMOTE_URL ?? 'https://izvdpjcqrrcxhokwycgu.supabase.co';
+const DEFAULT_REMOTE_URL = process.env.YESPAPA_DEFAULT_REMOTE_URL ?? 'https://remote.yespapa.io';
 const DEFAULT_REMOTE_KEY = process.env.YESPAPA_DEFAULT_REMOTE_KEY ?? 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Iml6dmRwamNxcnJjeGhva3d5Y2d1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzMzMTI2OTgsImV4cCI6MjA4ODg4ODY5OH0.B-G2ZXIv5Tj8BXjgODN2V2mQdSXTpSQms-jxz62e00k';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');

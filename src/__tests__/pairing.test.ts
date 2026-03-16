@@ -108,7 +108,7 @@ describe('pairing module', () => {
       const payload = createCombinedPayload(
         'JBSWY3DPEHPK3PXP',
         'my-long-hostname-example',
-        'https://izvdpjcqrrcxhokwycgu.supabase.co',
+        'https://remote.yespapa.io',
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSJ9.xxx',
         'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
         'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
