@@ -48,17 +48,21 @@ npx yespapa init
 ### Homebrew (macOS)
 
 ```bash
-brew tap yespapa/yespapa
+brew tap yespapa-cli/yespapa
 brew install yespapa
 yespapa init
 ```
 
-### Debian/Ubuntu
-
-Download the `.deb` from [GitHub Releases](https://github.com/yespapa-cli/yespapa/releases):
+### Debian/Ubuntu (apt-get)
 
 ```bash
-sudo dpkg -i yespapa_0.1.0-1_amd64.deb
+# Add the YesPaPa repository (one-time setup)
+curl -fsSL https://yespapa-cli.github.io/homebrew-yespapa/gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/yespapa.gpg
+echo "deb [signed-by=/usr/share/keyrings/yespapa.gpg arch=amd64] https://yespapa-cli.github.io/homebrew-yespapa/apt stable main" | sudo tee /etc/apt/sources.list.d/yespapa.list
+
+# Install
+sudo apt-get update
+sudo apt-get install yespapa
 yespapa init
 ```
 
