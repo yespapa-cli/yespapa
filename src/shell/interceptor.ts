@@ -575,13 +575,13 @@ _yp_intercept_inner() {
     if [ "$poll_status" = "approved" ]; then
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
-      echo "  [YesPaPa] Approved remotely\${poll_msg:+: \$poll_msg}" >&9
+      echo "  [YesPaPa] Approved remotely\${poll_msg:+: $poll_msg}" >&9
       echo "{\\"event\\":\\"approved\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 0
     elif [ "$poll_status" = "denied" ]; then
       poll_msg=$(yespapa_json_field "$poll_resp" "message")
       echo "" >&9
-      echo "  [YesPaPa] Denied remotely\${poll_msg:+: \$poll_msg}" >&9
+      echo "  [YesPaPa] Denied remotely\${poll_msg:+: $poll_msg}" >&9
       echo "{\\"event\\":\\"denied\\",\\"command\\":\\"$full_cmd\\",\\"source\\":\\"remote\\",\\"action\\":\\"wait_and_retry_later\\",\\"id\\":\\"$cmd_id\\"}" >&9
       return 1
     fi
@@ -805,7 +805,7 @@ function getFishConfPath(): string | null {
 /**
  * Generate a fish-compatible interceptor script.
  */
-function generateFishInterceptorScript(_socketPath: string): string {
+function generateFishInterceptorScript(): string {
   return `# YesPaPa Shell Interceptor for fish — DO NOT EDIT
 # This file is managed by yespapa. Changes will be overwritten.
 
@@ -886,7 +886,7 @@ export function injectInterceptor(socketPath: string = SOCKET_PATH, extraCommand
   // Fish shell support: write interceptor to conf.d if fish is installed
   const fishConfPath = getFishConfPath();
   if (fishConfPath) {
-    const fishScript = generateFishInterceptorScript(socketPath);
+    const fishScript = generateFishInterceptorScript();
     writeFileSync(fishConfPath, fishScript, { mode: 0o755 });
     injected.push(fishConfPath);
   }

@@ -84,7 +84,7 @@ export const execCommand = new Command('exec')
         if (response.message) {
           process.stderr.write(`[YesPaPa] ${response.message}\n`);
         }
-        const result = execSync(fullCommand, { stdio: 'inherit' });
+        execSync(fullCommand, { stdio: 'inherit' });
         process.exit(0);
       }
 

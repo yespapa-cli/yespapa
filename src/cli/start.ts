@@ -5,8 +5,7 @@ import { homedir } from 'node:os';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { openDatabase, getConfig, setConfig } from '../db/index.js';
-import { SOCKET_PATH } from '../daemon/socket.js';
+import { openDatabase, getConfig } from '../db/index.js';
 
 const YESPAPA_DIR = join(homedir(), '.yespapa');
 const DB_PATH = join(YESPAPA_DIR, 'yespapa.db');

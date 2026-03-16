@@ -55,7 +55,6 @@ export const doctorCommand = new Command('doctor')
     });
 
     // 3. SQLite database
-    let dbOk = false;
     if (existsSync(DB_PATH)) {
       try {
         const db = openDatabase(DB_PATH);
@@ -65,7 +64,6 @@ export const doctorCommand = new Command('doctor')
         const required = ['config', 'rules', 'command_log', 'grace_periods'];
         const missing = required.filter((t) => !tableNames.includes(t));
         if (missing.length === 0) {
-          dbOk = true;
           checks.push({ name: 'Database', status: 'ok', detail: DB_PATH });
         } else {
           checks.push({ name: 'Database', status: 'fail', detail: `Missing tables: ${missing.join(', ')}` });

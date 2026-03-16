@@ -1,7 +1,5 @@
 import { createInterface } from 'node:readline';
 import { validateCode } from '../totp/index.js';
-import { getConfig } from '../db/index.js';
-import { decryptSeed } from '../crypto/index.js';
 import { getActiveGracePeriods, type GracePeriodRow } from '../db/index.js';
 import type Database from 'better-sqlite3';
 import type { CommandStatus, ApprovalSource } from '../db/index.js';

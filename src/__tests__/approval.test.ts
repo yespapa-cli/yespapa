@@ -6,17 +6,6 @@ import { openMemoryDatabase, createGracePeriod } from '../db/index.js';
 
 function createMockInput(lines: string[]): Readable {
   const input = new Readable({ read() {} });
-  // Push lines with small delays to simulate user input
-  let i = 0;
-  const push = () => {
-    if (i < lines.length) {
-      input.push(lines[i] + '\n');
-      i++;
-    }
-    if (i >= lines.length) {
-      // Don't destroy — let the readline close naturally
-    }
-  };
   // Push all lines immediately
   for (const line of lines) {
     input.push(line + '\n');
