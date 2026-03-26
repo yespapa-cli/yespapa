@@ -85,10 +85,9 @@ if command -v nc >/dev/null 2>&1; then
 fi
 
 if [ -z "$_yp_response" ]; then
-  # Daemon not running — block for safety
-  echo "[YesPaPa] Daemon not running. Command blocked for safety." >&2
+  # Daemon not running — allow command to pass through
   unset _YP_INTERCEPTING
-  exit 1
+  exec "${realBinaryPath}" "$@"
 fi
 
 # Extract status field
@@ -415,9 +414,8 @@ _yp_intercept_inner() {
   local response
   response=$(yespapa_send "$json")
   if [ -z "$response" ]; then
-    echo "[YesPaPa] Daemon not running. Command blocked for safety." >&9
-    echo "{\\"event\\":\\"error\\",\\"command\\":\\"$full_cmd\\",\\"reason\\":\\"daemon_not_running\\"}" >&9
-    return 1
+    # Daemon not running — allow command to pass through
+    return 0
   fi
 
   local yp_status yp_message

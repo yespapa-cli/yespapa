@@ -60,13 +60,13 @@ export const execCommand = new Command('exec')
       }
     }
 
-    if (!existsSync(SOCKET_PATH)) {
-      const json = { event: 'denied', reason: 'Daemon not running' };
-      process.stderr.write(JSON.stringify(json) + '\n');
-      process.exit(1);
-    }
-
     const fullCommand = args.join(' ');
+
+    if (!existsSync(SOCKET_PATH)) {
+      // Daemon not running — allow command to pass through
+      try { execSync(fullCommand, { stdio: 'inherit' }); } catch { /* command failed */ }
+      process.exit(0);
+    }
     const cmdName = args[0];
     const cmdArgs = args.slice(1);
 

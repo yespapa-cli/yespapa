@@ -29,12 +29,15 @@ function prompt(rl: ReturnType<typeof createInterface>, question: string): Promi
 export const uninstallCommand = new Command('uninstall')
   .description('Uninstall YesPaPa (requires TOTP or master key)')
   .action(async () => {
-    if (!existsSync(DB_PATH)) {
+    const hasDb = existsSync(DB_PATH);
+    const hasDir = existsSync(YESPAPA_DIR);
+    const hasSocket = existsSync(SOCKET_PATH);
+
+    if (!hasDb && !hasDir && !hasSocket) {
       console.log('YesPaPa is not installed.');
       process.exit(0);
     }
 
-    const db = openDatabase(DB_PATH);
     const rl = createInterface({ input: process.stdin, output: process.stdout });
 
     try {
@@ -45,10 +48,12 @@ export const uninstallCommand = new Command('uninstall')
 
       if (isRoot) {
         console.log('Running as root — skipping authentication.\n');
-      } else {
+      } else if (hasDb) {
         console.log('Authentication required to uninstall.\n');
 
+        const db = openDatabase(DB_PATH);
         const passwordHash = getConfig(db, 'master_key_hash') ?? getConfig(db, 'removal_password_hash');
+        db.close();
         const input = await prompt(rl, 'Enter TOTP code or master key: ');
 
         let authenticated = false;
@@ -122,18 +127,25 @@ export const uninstallCommand = new Command('uninstall')
         }
 
         console.log('\n✓ Authentication successful. Uninstalling...\n');
+      } else {
+        // No DB but leftover files — skip authentication, just clean up
+        console.log('No database found. Cleaning up leftover files...\n');
       }
 
       // Stop daemon FIRST to prevent heartbeat from re-injecting interceptor
-      const daemonPid = getConfig(db, 'daemon_pid');
-      if (daemonPid) {
-        try {
-          process.kill(parseInt(daemonPid, 10), 'SIGTERM');
-          console.log(`  ✓ Stopped daemon (PID: ${daemonPid})`);
-          // Wait for daemon to fully exit before removing interceptor
-          await new Promise((resolve) => setTimeout(resolve, 1500));
-        } catch {
-          console.log(`  - Daemon not running (PID: ${daemonPid})`);
+      if (hasDb) {
+        const db = openDatabase(DB_PATH);
+        const daemonPid = getConfig(db, 'daemon_pid');
+        db.close();
+        if (daemonPid) {
+          try {
+            process.kill(parseInt(daemonPid, 10), 'SIGTERM');
+            console.log(`  ✓ Stopped daemon (PID: ${daemonPid})`);
+            // Wait for daemon to fully exit before removing interceptor
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          } catch {
+            console.log(`  - Daemon not running (PID: ${daemonPid})`);
+          }
         }
       }
 
@@ -142,9 +154,6 @@ export const uninstallCommand = new Command('uninstall')
       for (const p of removedProfiles) {
         console.log(`  ✓ Removed source line from ${p}`);
       }
-
-      // Close database before deleting
-      db.close();
 
       // Remove socket
       if (existsSync(SOCKET_PATH)) {
