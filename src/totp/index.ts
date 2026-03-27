@@ -32,7 +32,7 @@ export function generateOtpauthUri(seed: string, hostName: string): string {
 
 /**
  * Validate a 6-digit TOTP code against the seed.
- * Accepts ±1 period skew (90-second window total).
+ * Accepts ±2 period skew (150-second window total).
  * Returns true if the code is valid.
  */
 export function validateCode(seed: string, code: string): boolean {
